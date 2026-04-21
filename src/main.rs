@@ -25,6 +25,7 @@ fn main() -> Result<()> {
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
     let modem = peripherals.modem;
+    let mac = peripherals.mac;
 
     let uart1 = master::init_uart1_link(peripherals.uart1)?;
     let (mut uart1_tx, uart1_rx) = uart1.into_split();
@@ -33,6 +34,8 @@ fn main() -> Result<()> {
     let (uart_rx_queue_sender, uart_rx_queue_receiver) = mpsc::channel::<Vec<u8>>();
     let (wifi_station_interface_settings_sender, wifi_station_interface_settings_receiver) =
         mpsc::channel::<master::messages::interface_settings::WiFiStationSettings>();
+    let (ethernet_interface_settings_sender, ethernet_interface_settings_receiver) =
+        mpsc::channel::<master::messages::interface_settings::EthernetSettings>();
 
     thread::Builder::new()
         .name("uart-tx-task".into())
@@ -70,14 +73,31 @@ fn main() -> Result<()> {
 
     network::wifi_station::spawn_task(
         modem,
-        sysloop,
+        sysloop.clone(),
         nvs,
         wifi_station_interface_settings_receiver,
         uart_tx_queue_sender.clone(),
     )?;
+
+    network::ethernet::spawn_task(
+        mac,
+        peripherals.pins.gpio19,
+        peripherals.pins.gpio21,
+        peripherals.pins.gpio22,
+        peripherals.pins.gpio23,
+        peripherals.pins.gpio25,
+        peripherals.pins.gpio26,
+        peripherals.pins.gpio27,
+        peripherals.pins.gpio18,
+        peripherals.pins.gpio17,
+        sysloop,
+        ethernet_interface_settings_receiver,
+        uart_tx_queue_sender.clone(),
+    )?;
+    
     // Mock interface event until real master-side config flow is fully integrated.
     let _ = wifi_station_interface_settings_sender.send(network::wifi_station::mock_settings());
-    init_ethernet_lan8720()?;
+    let _ = ethernet_interface_settings_sender.send(network::ethernet::mock_settings());
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
@@ -95,17 +115,30 @@ fn main() -> Result<()> {
                         match master::messages::interface_settings::decode(&packet) {
                             Ok(msg) => {
                                 info!("RX InterfaceSettings: {:?}", msg);
-                                if let master::messages::interface_settings::InterfaceSettings::WiFiStation(
-                                    station_cfg,
-                                ) = msg.settings
-                                {
-                                    if let Err(err) =
-                                        wifi_station_interface_settings_sender.send(station_cfg)
-                                    {
-                                        warn!("Failed to enqueue WiFiStation interface event: {err}");
-                                    } else {
-                                        info!("Enqueued WiFiStation interface event");
+                                match msg.settings {
+                                    master::messages::interface_settings::InterfaceSettings::WiFiStation(
+                                        station_cfg,
+                                    ) => {
+                                        if let Err(err) =
+                                            wifi_station_interface_settings_sender.send(station_cfg)
+                                        {
+                                            warn!("Failed to enqueue WiFiStation interface event: {err}");
+                                        } else {
+                                            info!("Enqueued WiFiStation interface event");
+                                        }
                                     }
+                                    master::messages::interface_settings::InterfaceSettings::Ethernet(
+                                        ethernet_cfg,
+                                    ) => {
+                                        if let Err(err) =
+                                            ethernet_interface_settings_sender.send(ethernet_cfg)
+                                        {
+                                            warn!("Failed to enqueue Ethernet interface event: {err}");
+                                        } else {
+                                            info!("Enqueued Ethernet interface event");
+                                        }
+                                    }
+                                    master::messages::interface_settings::InterfaceSettings::WiFiAccessPoint(_) => {}
                                 }
                             }
                             Err(err) => warn!("RX InterfaceSettings decode failed: {err:#}"),
@@ -132,10 +165,4 @@ fn main() -> Result<()> {
         ready_tick = (ready_tick + 1) % 5;
         FreeRtos::delay_ms(1000);
     }
-}
-
-fn init_ethernet_lan8720() -> Result<()> {
-    info!("Ethernet LAN8720 init placeholder");
-    info!("TODO: configure RMII pins, PHY addr and power/reset GPIO, then start DHCP");
-    Ok(())
 }

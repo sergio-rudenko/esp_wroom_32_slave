@@ -129,6 +129,8 @@ Errors solved during recovery:
 ## Next engineering steps
 
 1. Apply `InterfaceSettings` messages to runtime network config changes (`WiFiStation`, `WiFiAccessPoint`, `Ethernet`).
+   - TODO: apply static IP settings for `WiFiStation` when `dhcp=false`.
+   - TODO: apply static IP settings for `Ethernet` when `dhcp=false`.
 2. Implement production-ready Wi-Fi mixed mode (`STA+AP`) by adding AP task and integrating with STA task.
 3. Implement LAN8720 bring-up with exact board pinout (RMII clock, PHY addr, power/reset GPIO).
 4. Add timeout/retry/watchdog policy around master communication and network state transitions.
