@@ -5,7 +5,7 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi, WifiDeviceId, WifiEvent};
 use log::*;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -21,6 +21,9 @@ pub fn spawn_task(
     nvs: EspDefaultNvsPartition,
     wifi_station_interface_settings_receiver: mpsc::Receiver<WiFiStationSettings>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
+    // Incremented once after Wi-Fi / lwIP init (success or fatal error) so UDP can avoid racing
+    // `EspWifi::new` with `std::net::UdpSocket::bind`.
+    lwip_socket_gate: Arc<AtomicU8>,
 ) -> Result<()> {
     const WIFI_STATION_TASK_STACK_BYTES: usize = 32 * 1024;
     const LINK_MONITOR_POLL_MS: u32 = 1000;
@@ -60,9 +63,11 @@ pub fn spawn_task(
             }
             Err(err) => {
                 error!("WiFiStation task failed to initialize Wi-Fi stack: {err:#}");
+                lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
                 return;
             }
         };
+        lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
         let mut cfg = match wifi_station_interface_settings_receiver.recv() {
             Ok(cfg) => cfg,

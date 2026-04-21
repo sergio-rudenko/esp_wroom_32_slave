@@ -7,7 +7,9 @@ use esp_idf_hal::mac::MAC;
 use esp_idf_svc::eth::{BlockingEth, EspEth, EthDriver, RmiiClockConfig, RmiiEth, RmiiEthChipset};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use log::*;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +30,8 @@ pub fn spawn_task(
     sysloop: EspSystemEventLoop,
     ethernet_interface_settings_receiver: mpsc::Receiver<EthernetSettings>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
+    // Incremented once after Ethernet / lwIP init (success or fatal error).
+    lwip_socket_gate: Arc<AtomicU8>,
 ) -> Result<()> {
     const ETHERNET_TASK_STACK_BYTES: usize = 24 * 1024;
     const LINK_MONITOR_POLL_MS: u32 = 1000;
@@ -63,9 +67,11 @@ pub fn spawn_task(
                 }
                 Err(err) => {
                     error!("Ethernet task failed to initialize stack: {err:#}");
+                    lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
                     return;
                 }
             };
+            lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
             let mut cfg = match ethernet_interface_settings_receiver.recv() {
                 Ok(cfg) => cfg,

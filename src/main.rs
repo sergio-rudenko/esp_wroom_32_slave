@@ -5,15 +5,20 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use log::*;
+use std::sync::atomic::AtomicU8;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 mod master;
 mod network;
+mod services;
 
 fn main() -> Result<()> {
     const UART_TX_TASK_STACK_BYTES: usize = 8 * 1024;
     const UART_RX_TASK_STACK_BYTES: usize = 8 * 1024;
+    /// WiFi station + Ethernet tasks each bump `lwip_socket_gate` once after lwIP-related init.
+    const LWIP_STACK_DRIVER_TASKS: u8 = 2;
 
     esp_idf_sys::link_patches();
     EspLogger::initialize_default();
@@ -36,6 +41,9 @@ fn main() -> Result<()> {
         mpsc::channel::<master::messages::interface_settings::WiFiStationSettings>();
     let (ethernet_interface_settings_sender, ethernet_interface_settings_receiver) =
         mpsc::channel::<master::messages::interface_settings::EthernetSettings>();
+    let (udp_listener_settings_sender, udp_listener_settings_receiver) =
+        mpsc::channel::<master::messages::service_settings::UdpListenerSettings>();
+    let lwip_socket_gate = Arc::new(AtomicU8::new(0));
 
     thread::Builder::new()
         .name("uart-tx-task".into())
@@ -77,6 +85,7 @@ fn main() -> Result<()> {
         nvs,
         wifi_station_interface_settings_receiver,
         uart_tx_queue_sender.clone(),
+        lwip_socket_gate.clone(),
     )?;
 
     network::ethernet::spawn_task(
@@ -93,11 +102,19 @@ fn main() -> Result<()> {
         sysloop,
         ethernet_interface_settings_receiver,
         uart_tx_queue_sender.clone(),
+        lwip_socket_gate.clone(),
     )?;
-    
-    // Mock interface event until real master-side config flow is fully integrated.
+
+    services::udp_listener::spawn_task(
+        udp_listener_settings_receiver,
+        lwip_socket_gate,
+        LWIP_STACK_DRIVER_TASKS,
+    )?;
+
+    // Mock interface / service config until real master-side flow is fully integrated.
     let _ = wifi_station_interface_settings_sender.send(network::wifi_station::mock_settings());
     let _ = ethernet_interface_settings_sender.send(network::ethernet::mock_settings());
+    let _ = udp_listener_settings_sender.send(services::udp_listener::mock_settings());
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
@@ -111,7 +128,28 @@ fn main() -> Result<()> {
 
             match master::protocol::decode_packet(&frame) {
                 Ok(packet) => {
-                    if packet.cmd == master::protocol::MessageType::InterfaceSettings.as_u8() {
+                    if packet.cmd == master::protocol::MessageType::ServiceSettings.as_u8() {
+                        match master::messages::service_settings::decode(&packet) {
+                            Ok(msg) => {
+                                info!(
+                                    "RX ServiceSettings: service={:?}, settings={:?}",
+                                    msg.service, msg.settings
+                                );
+                                match msg.settings {
+                                    master::messages::service_settings::ServiceSettings::UdpListener(
+                                        cfg,
+                                    ) => {
+                                        if let Err(err) = udp_listener_settings_sender.send(cfg) {
+                                            warn!("Failed to enqueue UdpListener settings: {err}");
+                                        } else {
+                                            info!("Enqueued UdpListener service settings");
+                                        }
+                                    }
+                                }
+                            }
+                            Err(err) => warn!("RX ServiceSettings decode failed: {err:#}"),
+                        }
+                    } else if packet.cmd == master::protocol::MessageType::InterfaceSettings.as_u8() {
                         match master::messages::interface_settings::decode(&packet) {
                             Ok(msg) => {
                                 info!("RX InterfaceSettings: {:?}", msg);

@@ -33,13 +33,22 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
   - `ready` (outbound only, encode)
   - `interface_settings` (inbound only, decode)
   - `interface_state` (outbound only, encode)
-- RX decode wired for `InterfaceSettings` with logging and routing
-- Wi-Fi STA task implemented in `src/network/wifi_station.rs`:
-  - receives `WiFiStation` settings events
+  - `service_settings` (inbound only, decode; `ServiceType` includes `UdpListener`, stubs for `TcpServer` / `NtpClient`)
+- RX decode wired for `InterfaceSettings` and `ServiceSettings` (UDP listener path) with logging and routing to tasks
+- Wi-Fi STA task (`src/network/wifi_station.rs`):
+  - receives `WiFiStationSettings` from channel
   - applies STA config and connects/reconnects
-  - monitors link state and emits interface state events to STM32
-  - reports RSSI periodically (every 20s while connected)
-- Ethernet LAN8720 init stub
+  - monitors link state and emits `InterfaceState` to STM32 (connected, connect_error, got_ip, rssi, disconnected)
+  - after `EspWifi` / lwIP init, bumps a shared gate counter so UDP sockets do not race tcpip startup
+- Ethernet LAN8720 RMII task (`src/network/ethernet.rs`):
+  - same pattern as STA; pinout documented in code
+  - bumps the same lwIP gate after `EthDriver` / `BlockingEth` init
+- UDP discovery listener (`src/services/udp_listener.rs`):
+  - waits for `UdpListenerSettings` (from master or dev mock)
+  - waits until Wi-Fi and Ethernet driver tasks have finished lwIP-related init (no fixed delay; works without link/IP)
+  - binds `0.0.0.0` on `requestPorts`, matches JSON `{"type":…}`, replies unicast to client IP on `responsePorts` (round-robin)
+- Dev mocks in `main` for Wi-Fi, Ethernet, and UDP listener until the STM32 config path is complete
+- Host-side check script: `check_udp_listener.py` (broadcast IP argument, logs send/recv once per second)
 - `sdkconfig.defaults` prefilled for LAN8720 RMII baseline
 
 ## Build/flash (first setup)
@@ -52,21 +61,25 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 3. Install flasher:
    - `cargo install espflash`
 4. Build:
-   - `cargo build`
+   - `cargo build --target xtensa-esp32-espidf`
 5. Flash + monitor:
    - `cargo run`
 
-## Project structure (UART/master)
+## Project structure (UART / master / network / services)
 
-- `src/master/transport.rs` - UART1 hardware init
-- `src/master/protocol.rs` - frame encode/decode + stream frame extraction
-- `src/master/messages/ready.rs` - READY message (encode only)
-- `src/master/messages/interface_settings.rs` - InterfaceSettings (decode only)
-- `src/master/messages/interface_state.rs` - InterfaceState (encode only)
-- `src/network/wifi_station.rs` - WiFiStation task and reconnect loop
+- `src/master/transport.rs` — UART1 hardware init
+- `src/master/protocol.rs` — frame encode/decode + stream frame extraction
+- `src/master/messages/ready.rs` — READY (encode only)
+- `src/master/messages/interface_settings.rs` — InterfaceSettings (decode only)
+- `src/master/messages/interface_state.rs` — InterfaceState (encode only)
+- `src/master/messages/service_settings.rs` — ServiceSettings / `UdpListener` payload (decode only)
+- `src/network/wifi_station.rs` — Wi-Fi STA task
+- `src/network/ethernet.rs` — Ethernet task
+- `src/services/udp_listener.rs` — UDP discovery listener task
 
 ## Next steps
 
-- Add WiFi AP and Ethernet runtime tasks (similar to WiFiStation)
-- Replace Ethernet placeholder with full `esp-idf-svc::eth` setup for LAN8720 board wiring
-- Extend `InterfaceState` coverage for AP/Ethernet runtime events
+- **TCP Server** service (`ServiceType::TcpServer` in `ServiceSettings`): accept connections, framing with STM32 per protocol plan
+- Wi-Fi AP runtime task (`WiFiAccessPoint` in `InterfaceSettings`)
+- Apply static IP from `InterfaceSettings` when `dhcp=false` (STA and Ethernet)
+- Extend `InterfaceState` as new events appear

@@ -8,8 +8,9 @@ Embedded Rust firmware for `ESP32-WROOM-32UE` with:
 
 - UART0 logs
 - UART1 link to host controller (`STM32`)
-- Wi-Fi (`STA` + `AP`)
+- Wi-Fi (`STA` + future `AP`)
 - Ethernet (`LAN8720A-CP`)
+- Services (UDP discovery listener done; **TCP Server** next)
 - Maximum stability over novelty
 
 ## Chosen stack
@@ -30,38 +31,27 @@ Implemented:
 - Bootstrapped Rust project for ESP32 target
 - UART0 logs via `EspLogger`
 - UART1 init for STM32 (`GPIO17` TX, `GPIO16` RX, `115200`)
-- UART1 split into async/non-blocking runtime tasks:
-  - TX task: sends framed packets from TX queue/channel
-  - RX task: reads UART bytes, extracts valid frames, pushes to RX queue/channel
-- Packet framing protocol implemented:
+- UART1 split into async/non-blocking runtime tasks (TX/RX threads + channels)
+- Packet framing protocol:
   - `SOF(0xAA) + LEN(u16 LE payload size) + CMD + PARAM + PAYLOAD + CRC16-CCITT`
-- READY message implemented and enabled:
-  - sent once at startup
-  - then every 5s until first valid frame from master is received
-  - boot reason resolved locally in READY message module from real ESP reset reason
-- Message modules introduced under `src/master/messages`:
-  - `ready` (ESP32 -> STM32, encode only)
-  - `interface_settings` (STM32 -> ESP32, decode only)
-  - `interface_state` (ESP32 -> STM32, encode only)
-- `InterfaceSettings` decode from MsgPack payload implemented with validation and RX routing
-- Wi-Fi STA runtime task implemented (`src/network/wifi_station.rs`):
-  - dedicated async task consumes `WiFiStation` interface settings from channel
-  - applies config and connects/reconnects with `reconnectPeriod`
-  - monitors link state (`is_connected`/`is_up`)
-  - emits `InterfaceState` events to STM32:
-    - `connected` (with STA MAC)
-    - `connect_error` (prefers Wi-Fi disconnect reason, fallback to ESP error code)
-    - `got_ip` (IP/mask/gateway)
-    - `rssi` (periodic, every 20s while connected)
-    - `disconnected` (with human-readable reason logging + reason code in payload)
-- Ethernet init function placeholder (`init_ethernet_lan8720`)
-- `sdkconfig.defaults` baseline for LAN8720 RMII
+- READY message (encode only): periodic until first master frame; real ESP reset reason
+- Message modules under `src/master/messages`:
+  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**
+- `InterfaceSettings` decode (MsgPack), validation, RX routing to Wi-Fi STA and Ethernet tasks
+- **`ServiceSettings`** decode for **`ServiceType::UdpListener`** (MsgPack JSON fields: `requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`). `TcpServer` / `NtpClient` return “not implemented” until those features exist
+- Wi-Fi STA task (`wifi_station.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
+- Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
+- **UDP listener** (`services/udp_listener.rs`):
+  - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
+  - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
+- **`check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
+- Dev **mocks** in `main` for Wi-Fi, Ethernet, UDP listener (remove when STM32 owns config)
 
 Not implemented yet:
 
-- WiFi AP runtime task
-- Ethernet driver bring-up with full pin mapping and event handling
-- Applying decoded `InterfaceSettings` for `WiFiAccessPoint` and `Ethernet` into live runtime tasks
+- **TCP Server** service (next git-flow feature): `ServiceSettings` for `ServiceType::TcpServer`, accept pool, protocol toward STM32
+- Wi-Fi AP runtime task
+- Applying static IP for STA/Ethernet when `dhcp=false` in `InterfaceSettings`
 
 ## Build/toolchain notes
 
@@ -101,8 +91,7 @@ Dependency set confirmed to compile in this workspace:
 - `esp-idf-sys = "0.36"`
 - `esp-idf-hal = "0.45"`
 - `esp-idf-svc = "0.51"` with features `["alloc", "critical-section", "experimental"]`
-- `serde = "1"` with `derive`
-- `rmp-serde = "1"`
+- `serde = "1"` with `derive`, `rmp-serde = "1"`, **`serde_json = "1"`**
 - `embuild = { version = "0.33", features = ["espidf"] }` (build-dependency)
 
 Important project config:
@@ -116,7 +105,7 @@ Confirmed local build command sequence:
 1. `source $HOME/export-esp.sh`
 2. `export IDF_PATH=/mnt/projects/esp32-uart-slave-conroller2/.embuild/espressif/esp-idf/v5.2.3`
 3. `export IDF_TOOLS_PATH=/mnt/projects/esp32-uart-slave-conroller2/.embuild/espressif`
-4. `cargo build`
+4. `cargo build --target xtensa-esp32-espidf`
 
 Errors solved during recovery:
 
@@ -125,12 +114,11 @@ Errors solved during recovery:
 - `cannot find espidf in embuild` -> enable `embuild` feature `espidf`
 - `xtensa-esp32-elf-gcc ... --ldproxy-linker` unknown option -> install/use `ldproxy` as linker
 - `undefined reference to __pender` -> remove `embassy-time-driver` feature from `esp-idf-svc`
+- **`Invalid mbox` / `tcpip_send_msg_wait_sem`** when opening UDP during Wi-Fi init -> **`lwip_socket_gate`**: STA and ETH tasks increment after their lwIP init; UDP listener waits for expected count before `UdpSocket::bind`
 
 ## Next engineering steps
 
-1. Apply `InterfaceSettings` messages to runtime network config changes (`WiFiStation`, `WiFiAccessPoint`, `Ethernet`).
-   - TODO: apply static IP settings for `WiFiStation` when `dhcp=false`.
-   - TODO: apply static IP settings for `Ethernet` when `dhcp=false`.
-2. Implement production-ready Wi-Fi mixed mode (`STA+AP`) by adding AP task and integrating with STA task.
-3. Implement LAN8720 bring-up with exact board pinout (RMII clock, PHY addr, power/reset GPIO).
-4. Add timeout/retry/watchdog policy around master communication and network state transitions.
+1. **TCP Server** (`feature/TCP-Server`): decode `ServiceSettings` for `TcpServer`, dedicated task, `std::net::TcpListener` or IDF-friendly accept loop, bridge to UART/protocol as designed.
+2. Apply static IP from `InterfaceSettings` when `dhcp=false` (Wi-Fi STA and Ethernet).
+3. Wi-Fi AP task and mixed STA+AP policy.
+4. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
