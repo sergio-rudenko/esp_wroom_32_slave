@@ -42,16 +42,26 @@ Implemented:
 - Message modules introduced under `src/master/messages`:
   - `ready` (ESP32 -> STM32, encode only)
   - `interface_settings` (STM32 -> ESP32, decode only)
-- `InterfaceSettings` decode from MsgPack payload implemented with validation and RX logging
-- Wi-Fi init function placeholder (`init_wifi_sta_ap`)
+  - `interface_state` (ESP32 -> STM32, encode only)
+- `InterfaceSettings` decode from MsgPack payload implemented with validation and RX routing
+- Wi-Fi STA runtime task implemented (`src/network/wifi_station.rs`):
+  - dedicated async task consumes `WiFiStation` interface settings from channel
+  - applies config and connects/reconnects with `reconnectPeriod`
+  - monitors link state (`is_connected`/`is_up`)
+  - emits `InterfaceState` events to STM32:
+    - `connected` (with STA MAC)
+    - `connect_error` (prefers Wi-Fi disconnect reason, fallback to ESP error code)
+    - `got_ip` (IP/mask/gateway)
+    - `rssi` (periodic, every 20s while connected)
+    - `disconnected` (with human-readable reason logging + reason code in payload)
 - Ethernet init function placeholder (`init_ethernet_lan8720`)
 - `sdkconfig.defaults` baseline for LAN8720 RMII
 
 Not implemented yet:
 
-- Real STA+AP configuration and start
+- WiFi AP runtime task
 - Ethernet driver bring-up with full pin mapping and event handling
-- Applying decoded `InterfaceSettings` into live Wi-Fi/Ethernet configuration
+- Applying decoded `InterfaceSettings` for `WiFiAccessPoint` and `Ethernet` into live runtime tasks
 
 ## Build/toolchain notes
 
@@ -119,6 +129,6 @@ Errors solved during recovery:
 ## Next engineering steps
 
 1. Apply `InterfaceSettings` messages to runtime network config changes (`WiFiStation`, `WiFiAccessPoint`, `Ethernet`).
-2. Implement production-ready Wi-Fi mixed mode (`STA+AP`) with reconnect logic.
+2. Implement production-ready Wi-Fi mixed mode (`STA+AP`) by adding AP task and integrating with STA task.
 3. Implement LAN8720 bring-up with exact board pinout (RMII clock, PHY addr, power/reset GPIO).
 4. Add timeout/retry/watchdog policy around master communication and network state transitions.

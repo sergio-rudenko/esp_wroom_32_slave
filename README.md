@@ -32,8 +32,13 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 - `master/messages` modular message layout:
   - `ready` (outbound only, encode)
   - `interface_settings` (inbound only, decode)
-- RX decode wired for `InterfaceSettings` with logging
-- Wi-Fi STA+AP init stub
+  - `interface_state` (outbound only, encode)
+- RX decode wired for `InterfaceSettings` with logging and routing
+- Wi-Fi STA task implemented in `src/network/wifi_station.rs`:
+  - receives `WiFiStation` settings events
+  - applies STA config and connects/reconnects
+  - monitors link state and emits interface state events to STM32
+  - reports RSSI periodically (every 20s while connected)
 - Ethernet LAN8720 init stub
 - `sdkconfig.defaults` prefilled for LAN8720 RMII baseline
 
@@ -57,9 +62,11 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 - `src/master/protocol.rs` - frame encode/decode + stream frame extraction
 - `src/master/messages/ready.rs` - READY message (encode only)
 - `src/master/messages/interface_settings.rs` - InterfaceSettings (decode only)
+- `src/master/messages/interface_state.rs` - InterfaceState (encode only)
+- `src/network/wifi_station.rs` - WiFiStation task and reconnect loop
 
 ## Next steps
 
-- Fill credentials and AP config in `init_wifi_sta_ap()`
+- Add WiFi AP and Ethernet runtime tasks (similar to WiFiStation)
 - Replace Ethernet placeholder with full `esp-idf-svc::eth` setup for LAN8720 board wiring
-- Apply decoded `InterfaceSettings` to real Wi-Fi/Ethernet runtime configuration
+- Extend `InterfaceState` coverage for AP/Ethernet runtime events
