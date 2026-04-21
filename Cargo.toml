@@ -1,0 +1,29 @@
+[package]
+name = "esp32-uart-slave-controller2"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
+embedded-svc = "0.28"
+esp-idf-sys = { version = "0.36", features = ["binstart"] }
+esp-idf-hal = "0.45"
+esp-idf-svc = { version = "0.51", default-features = false, features = ["alloc", "critical-section", "experimental"] }
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }
+
