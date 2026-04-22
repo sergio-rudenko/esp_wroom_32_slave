@@ -138,7 +138,6 @@ fn main() -> Result<()> {
         LWIP_STACK_DRIVER_TASKS,
         connected_links.clone(),
     )?;
-    let _ = ntp_client_settings_sender.send(services::ntp_client::mock_settings());
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;

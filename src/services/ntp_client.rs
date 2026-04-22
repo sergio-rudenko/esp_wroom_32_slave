@@ -24,19 +24,6 @@ const NTP_ERROR_SOCKET: i32 = 2;
 const NTP_ERROR_TIMEOUT: i32 = 3;
 const NTP_ERROR_INVALID_RESPONSE: i32 = 4;
 
-pub fn mock_settings() -> NtpClientSettings {
-    NtpClientSettings {
-        enabled: true,
-        timezone: 180,
-        resync_period: 15,
-        servers: vec![
-            "0.pool.ntp.org".into(),
-            "1.pool.ntp.org".into(),
-            "2.pool.ntp.org".into(),
-        ],
-    }
-}
-
 pub fn spawn_task(
     ntp_settings_receiver: mpsc::Receiver<NtpClientSettings>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
