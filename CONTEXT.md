@@ -44,7 +44,8 @@ Implemented:
 - **UDP listener** (`services/udp_listener.rs`):
   - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
   - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
-- **`check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
+- **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
+- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings` TX + ESP frame decode)
 - Dev **mocks** in `main` for Wi-Fi, Ethernet, UDP listener (remove when STM32 owns config)
 
 Not implemented yet:

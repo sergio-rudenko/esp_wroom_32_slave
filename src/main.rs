@@ -111,11 +111,6 @@ fn main() -> Result<()> {
         LWIP_STACK_DRIVER_TASKS,
     )?;
 
-    // Mock interface / service config until real master-side flow is fully integrated.
-    let _ = wifi_station_interface_settings_sender.send(network::wifi_station::mock_settings());
-    let _ = ethernet_interface_settings_sender.send(network::ethernet::mock_settings());
-    let _ = udp_listener_settings_sender.send(services::udp_listener::mock_settings());
-
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
 

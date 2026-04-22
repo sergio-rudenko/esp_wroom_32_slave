@@ -218,14 +218,6 @@ pub fn spawn_task(
         .map_err(|err| anyhow::anyhow!("failed to spawn Ethernet task: {err}"))
 }
 
-pub fn mock_settings() -> EthernetSettings {
-    EthernetSettings {
-        enabled: true,
-        dhcp: true,
-        static_config: None,
-    }
-}
-
 fn recv_next_or_stop(
     rx: &mpsc::Receiver<EthernetSettings>,
 ) -> Result<EthernetSettings, ()> {

@@ -48,7 +48,8 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
   - waits until Wi-Fi and Ethernet driver tasks have finished lwIP-related init (no fixed delay; works without link/IP)
   - binds `0.0.0.0` on `requestPorts`, matches JSON `{"type":…}`, replies unicast to client IP on `responsePorts` (round-robin)
 - Dev mocks in `main` for Wi-Fi, Ethernet, and UDP listener until the STM32 config path is complete
-- Host-side check script: `check_udp_listener.py` (broadcast IP argument, logs send/recv once per second)
+- Host-side check script: `tools/check_udp_listener.py` (broadcast IP argument, logs send/recv once per second)
+- Host-side STM32 replacement over UART: `tools/mock_master_uart.py` (sends `InterfaceSettings`, decodes ESP32 frames)
 - `sdkconfig.defaults` prefilled for LAN8720 RMII baseline
 
 ## Build/flash (first setup)
