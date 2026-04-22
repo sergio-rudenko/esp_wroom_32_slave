@@ -49,6 +49,7 @@ pub fn spawn_task(
         .name("eth-task".into())
         .stack_size(ETHERNET_TASK_STACK_BYTES)
         .spawn(move || {
+            crate::system::wdt::subscribe_current_task("eth-task");
             let mut eth = match EthDriver::new(
                 mac,
                 rmii_rxd0,
@@ -77,22 +78,29 @@ pub fn spawn_task(
                 Err(err) => {
                     error!("Ethernet task failed to initialize stack: {err:#}");
                     lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
+                    crate::system::wdt::unsubscribe_current_task("eth-task");
                     return;
                 }
             };
             lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
-            let mut settings = match ethernet_interface_settings_receiver.recv() {
-                Ok(settings) => settings,
-                Err(_) => {
-                    info!("Ethernet task stopped: event channel closed before first config");
-                    return;
+            let mut settings = loop {
+                match ethernet_interface_settings_receiver.recv_timeout(Duration::from_secs(1)) {
+                    Ok(settings) => break settings,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        crate::system::wdt::feed("eth-task");
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        info!("Ethernet task stopped: event channel closed before first config");
+                        return;
+                    }
                 }
             };
 
             let mut link_registered = false;
 
             loop {
+                crate::system::wdt::feed("eth-task");
                 info!("Ethernet settings: enabled={}, dhcp={}", settings.enabled, settings.dhcp);
 
                 if !settings.enabled {
@@ -248,6 +256,7 @@ pub fn spawn_task(
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         // keep current config and retry
+                        crate::system::wdt::feed("eth-task");
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         if link_registered {
@@ -266,11 +275,16 @@ pub fn spawn_task(
 fn recv_next_or_stop(
     rx: &mpsc::Receiver<EthernetSettings>,
 ) -> Result<EthernetSettings, ()> {
-    match rx.recv() {
-        Ok(next_settings) => Ok(next_settings),
-        Err(_) => {
-            info!("Ethernet task stopped: event channel closed");
-            Err(())
+    loop {
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(next_settings) => return Ok(next_settings),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                crate::system::wdt::feed("eth-task");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("Ethernet task stopped: event channel closed");
+                return Err(());
+            }
         }
     }
 }
@@ -283,6 +297,7 @@ fn monitor_link_state(
 ) -> Result<Option<EthernetSettings>, ()> {
     let mut last_report = Instant::now();
     loop {
+        crate::system::wdt::feed("eth-task");
         match ethernet_interface_settings_receiver.try_recv() {
             Ok(next_settings) => return Ok(Some(next_settings)),
             Err(mpsc::TryRecvError::Empty) => {}

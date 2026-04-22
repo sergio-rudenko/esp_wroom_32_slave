@@ -306,7 +306,24 @@ def log_rx_packet(pkt: Packet, raw_frame: bytes) -> None:
 
     if pkt.cmd == MessageType.READY:
         boot_reason = pkt.parameter
-        boot_name = {0: "Undefined", 1: "Power", 2: "Reset", 3: "Watchdog"}.get(boot_reason, str(boot_reason))
+        boot_name = {
+            0: "Undefined",
+            1: "Power",
+            2: "External",
+            3: "Software",
+            4: "Panic",
+            5: "InterruptWatchdog",
+            6: "TaskWatchdog",
+            7: "OtherWatchdog",
+            8: "DeepSleep",
+            9: "Brownout",
+            10: "Sdio",
+            11: "Usb",
+            12: "Jtag",
+            13: "Efuse",
+            14: "PowerGlitch",
+            15: "CpuLockup",
+        }.get(boot_reason, str(boot_reason))
         logging.info("  READY boot_reason=%s(%s)", boot_reason, boot_name)
         return
 

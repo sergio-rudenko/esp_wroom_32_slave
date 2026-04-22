@@ -52,6 +52,7 @@ pub fn spawn_task(
         .name("wifi-task".into())
         .stack_size(WIFI_STATION_TASK_STACK_BYTES)
         .spawn(move || {
+            crate::system::wdt::subscribe_current_task("wifi-task");
             let disconnect_reason = Arc::new(AtomicI32::new(0));
             let disconnect_reason_for_event = disconnect_reason.clone();
             let uart_tx_for_events = uart_tx_queue_sender.clone();
@@ -132,6 +133,7 @@ pub fn spawn_task(
                 Err(err) => {
                     error!("WiFi task failed to initialize Wi-Fi stack: {err:#}");
                     lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
+                    crate::system::wdt::unsubscribe_current_task("wifi-task");
                     return;
                 }
             };
@@ -142,6 +144,7 @@ pub fn spawn_task(
                     Ok(sta_settings) => break sta_settings,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         process_wifi_scan_requests(&mut wifi, &wifi_scan_receiver, &uart_tx_queue_sender);
+                        crate::system::wdt::feed("wifi-task");
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         info!("WiFi task stopped: event channel closed before first config");
@@ -153,6 +156,7 @@ pub fn spawn_task(
             let mut link_registered = false;
 
             loop {
+                crate::system::wdt::feed("wifi-task");
                 while let Ok(next_ap_settings) = wifi_ap_interface_settings_receiver.try_recv() {
                     ap_settings = next_ap_settings;
                     info!(
@@ -362,6 +366,7 @@ pub fn spawn_task(
                                 break;
                             }
                             thread::sleep(Duration::from_millis(250));
+                            crate::system::wdt::feed("wifi-task");
                         }
                         continue;
                     }
@@ -508,6 +513,7 @@ pub fn spawn_task(
                         break;
                     }
                     thread::sleep(Duration::from_millis(250));
+                    crate::system::wdt::feed("wifi-task");
                 }
             }
         })
@@ -548,6 +554,7 @@ fn monitor_connected_state(
     let mut last_rssi_report = Instant::now();
 
     loop {
+        crate::system::wdt::feed("wifi-task");
         process_wifi_scan_requests(wifi, wifi_scan_receiver, uart_tx_queue_sender);
         match wifi_ap_interface_settings_receiver.try_recv() {
             Ok(next_ap_settings) => {

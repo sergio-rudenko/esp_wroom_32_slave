@@ -54,13 +54,18 @@ fn run(
     lwip_socket_gate_expected: u8,
     connected_links: Arc<AtomicU8>,
 ) {
+    crate::system::wdt::subscribe_current_task("ntp-client");
     info!("NTP client task started; waiting for ServiceSettings (NtpClient)...");
 
-    let mut settings = match ntp_settings_receiver.recv() {
-        Ok(settings) => settings,
-        Err(_) => {
-            info!("NTP client task stopped: settings channel closed before first config");
-            return;
+    let mut settings = loop {
+        match ntp_settings_receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(settings) => break settings,
+            Err(mpsc::RecvTimeoutError::Timeout) => crate::system::wdt::feed("ntp-client"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("NTP client task stopped: settings channel closed before first config");
+                crate::system::wdt::unsubscribe_current_task("ntp-client");
+                return;
+            }
         }
     };
 
@@ -68,14 +73,18 @@ fn run(
     let mut no_link_reported = false;
 
     loop {
+        crate::system::wdt::feed("ntp-client");
         if !settings.enabled {
             info!("NTP client disabled");
             no_link_reported = false;
-            settings = match ntp_settings_receiver.recv() {
-                Ok(next_settings) => next_settings,
-                Err(_) => {
-                    info!("NTP client task stopped: settings channel closed");
-                    return;
+            settings = loop {
+                match ntp_settings_receiver.recv_timeout(Duration::from_secs(1)) {
+                    Ok(next_settings) => break next_settings,
+                    Err(mpsc::RecvTimeoutError::Timeout) => crate::system::wdt::feed("ntp-client"),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        info!("NTP client task stopped: settings channel closed");
+                        return;
+                    }
                 }
             };
             continue;
@@ -93,6 +102,7 @@ fn run(
                     return;
                 }
             }
+            crate::system::wdt::feed("ntp-client");
             continue;
         }
         no_link_reported = false;
@@ -138,6 +148,7 @@ fn run(
                     if Instant::now() >= deadline {
                         break;
                     }
+                    crate::system::wdt::feed("ntp-client");
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     info!("NTP client task stopped: settings channel closed");
@@ -228,6 +239,7 @@ fn wait_for_lwip_driver_init(counter: &Arc<AtomicU8>, expected: u8) {
     let mut waited = 0_u32;
     while counter.load(Ordering::SeqCst) < expected && waited < MAX_WAIT_MS {
         FreeRtos::delay_ms(SLICE_MS);
+        crate::system::wdt::feed("ntp-client");
         waited += SLICE_MS;
     }
     let n = counter.load(Ordering::SeqCst);

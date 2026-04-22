@@ -52,13 +52,18 @@ fn run(
     lwip_socket_gate: Arc<AtomicU8>,
     lwip_socket_gate_expected: u8,
 ) {
+    crate::system::wdt::subscribe_current_task("udp-listener");
     info!("UDP listener task started; waiting for ServiceSettings (UdpListener)…");
 
     let mut settings: UdpListenerSettings = loop {
-        match udp_settings_receiver.recv() {
+        match udp_settings_receiver.recv_timeout(std::time::Duration::from_secs(1)) {
             Ok(settings) => break settings,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                crate::system::wdt::feed("udp-listener");
+            }
             Err(_) => {
                 info!("UDP listener task: settings channel closed before first config");
+                crate::system::wdt::unsubscribe_current_task("udp-listener");
                 return;
             }
         }
@@ -69,6 +74,7 @@ fn run(
     let mut response_rr: usize = 0;
 
     loop {
+        crate::system::wdt::feed("udp-listener");
         if sockets.is_empty() {
             wait_for_lwip_driver_init(&lwip_socket_gate, lwip_socket_gate_expected);
             match open_sockets(&settings) {
@@ -131,6 +137,7 @@ fn wait_for_lwip_driver_init(counter: &Arc<AtomicU8>, expected: u8) {
     let mut waited = 0_u32;
     while counter.load(Ordering::SeqCst) < expected && waited < MAX_WAIT_MS {
         FreeRtos::delay_ms(SLICE_MS);
+        crate::system::wdt::feed("udp-listener");
         waited += SLICE_MS;
     }
     let n = counter.load(Ordering::SeqCst);

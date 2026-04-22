@@ -105,7 +105,7 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - `InterfaceState` — только `ESP32 -> STM32`;
 - `ServiceSettings` — только `STM32 -> ESP32`;
 - `ServiceState` — только `ESP32 -> STM32`;
-- `TcpCommand` — `STM32 -> ESP32`;
+- `TcpCommand` — только `STM32 -> ESP32`;
 - `TcpData` — двунаправленно;
 - `WifiScan` — двунаправленно.
 
@@ -117,6 +117,52 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - каждые 5 секунд, пока не получен первый валидный кадр от мастера.
 
 `PARAM` содержит `BootReason`.
+
+### 3.4. Политика WDT и `BootReason`
+
+В проекте включен `Task WDT`:
+
+- таймаут: `10` секунд;
+- режим: panic/reset при срабатывании;
+- feed выполняется в рабочих циклах задач.
+
+Под надзором WDT:
+
+- `main-loop`
+- `uart-tx-task`
+- `uart-rx-task`
+- `wifi-task`
+- `eth-task`
+- `udp-listener`
+- `tcp-server`
+- `ntp-client`
+
+После рестарта `ESP32` отправляет `Ready`, где `PARAM` содержит причину сброса.  
+Для watchdog сценариев это обычно:
+
+- `InterruptWatchdog`
+- `TaskWatchdog`
+- `OtherWatchdog`
+- `CpuLockup`
+
+Полный список `BootReason`:
+
+- `0` `Undefined`
+- `1` `Power`
+- `2` `External`
+- `3` `Software`
+- `4` `Panic`
+- `5` `InterruptWatchdog`
+- `6` `TaskWatchdog`
+- `7` `OtherWatchdog`
+- `8` `DeepSleep`
+- `9` `Brownout`
+- `10` `Sdio`
+- `11` `Usb`
+- `12` `Jtag`
+- `13` `Efuse`
+- `14` `PowerGlitch`
+- `15` `CpuLockup`
 
 ---
 

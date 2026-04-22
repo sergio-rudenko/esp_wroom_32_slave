@@ -13,6 +13,7 @@ use std::thread;
 mod master;
 mod network;
 mod services;
+mod system;
 
 fn main() -> Result<()> {
     const UART_TX_TASK_STACK_BYTES: usize = 8 * 1024;
@@ -24,6 +25,7 @@ fn main() -> Result<()> {
     EspLogger::initialize_default();
 
     info!("Booting ESP32 UART slave controller...");
+    system::wdt::init(10);
 
     let peripherals = esp_idf_hal::peripherals::Peripherals::take()?;
 
@@ -63,8 +65,16 @@ fn main() -> Result<()> {
         .name("uart-tx-task".into())
         .stack_size(UART_TX_TASK_STACK_BYTES)
         .spawn(move || {
-            while let Ok(frame) = uart_tx_queue_receiver.recv() {
-                let _ = uart1_tx.write(&frame);
+            system::wdt::subscribe_current_task("uart-tx-task");
+            loop {
+                match uart_tx_queue_receiver.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Ok(frame) => {
+                        let _ = uart1_tx.write(&frame);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+                system::wdt::feed("uart-tx-task");
             }
         })
         .map_err(|err| anyhow::anyhow!("failed to spawn UART TX task: {err}"))?;
@@ -73,6 +83,7 @@ fn main() -> Result<()> {
         .name("uart-rx-task".into())
         .stack_size(UART_RX_TASK_STACK_BYTES)
         .spawn(move || {
+            system::wdt::subscribe_current_task("uart-rx-task");
             let mut stream_buf = Vec::with_capacity(1024);
             let mut chunk = [0_u8; 256];
 
@@ -86,6 +97,7 @@ fn main() -> Result<()> {
                     }
                 }
                 FreeRtos::delay_ms(10);
+                system::wdt::feed("uart-rx-task");
             }
         })
         .map_err(|err| anyhow::anyhow!("failed to spawn UART RX task: {err}"))?;
@@ -150,6 +162,7 @@ fn main() -> Result<()> {
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
+    system::wdt::subscribe_current_task("main-loop");
 
     loop {
         while let Ok(frame) = uart_rx_queue_receiver.try_recv() {
@@ -292,5 +305,6 @@ fn main() -> Result<()> {
 
         ready_tick = (ready_tick + 1) % 5;
         FreeRtos::delay_ms(1000);
+        system::wdt::feed("main-loop");
     }
 }

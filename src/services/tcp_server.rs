@@ -63,13 +63,18 @@ fn run(
     lwip_socket_gate: Arc<AtomicU8>,
     lwip_socket_gate_expected: u8,
 ) {
+    crate::system::wdt::subscribe_current_task("tcp-server");
     info!("TCP server task started; waiting for ServiceSettings (TcpServer)...");
 
-    let mut settings = match tcp_settings_receiver.recv() {
-        Ok(settings) => settings,
-        Err(_) => {
-            info!("TCP server task stopped: settings channel closed before first config");
-            return;
+    let mut settings = loop {
+        match tcp_settings_receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(settings) => break settings,
+            Err(mpsc::RecvTimeoutError::Timeout) => crate::system::wdt::feed("tcp-server"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("TCP server task stopped: settings channel closed before first config");
+                crate::system::wdt::unsubscribe_current_task("tcp-server");
+                return;
+            }
         }
     };
 
@@ -78,6 +83,7 @@ fn run(
     let mut rx_buf = [0_u8; MAX_PAYLOAD_SIZE];
 
     loop {
+        crate::system::wdt::feed("tcp-server");
         if listener.is_none() {
             wait_for_lwip_driver_init(&lwip_socket_gate, lwip_socket_gate_expected);
             match open_listener(settings.port) {
@@ -368,6 +374,7 @@ fn wait_for_lwip_driver_init(counter: &Arc<AtomicU8>, expected: u8) {
     let mut waited = 0_u32;
     while counter.load(Ordering::SeqCst) < expected && waited < MAX_WAIT_MS {
         FreeRtos::delay_ms(SLICE_MS);
+        crate::system::wdt::feed("tcp-server");
         waited += SLICE_MS;
     }
     let n = counter.load(Ordering::SeqCst);
