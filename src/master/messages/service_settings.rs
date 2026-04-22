@@ -50,9 +50,18 @@ pub struct UdpListenerSettings {
     pub port: u16,
 }
 
+/// MsgPack/JSON payload for `ServiceType::TcpServer` (from host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpServerSettings {
+    pub port: u16,
+    #[serde(rename = "clientTimeout")]
+    pub client_timeout: u16,
+}
+
 #[derive(Debug, Clone)]
 pub enum ServiceSettings {
     UdpListener(UdpListenerSettings),
+    TcpServer(TcpServerSettings),
 }
 
 #[derive(Debug, Clone)]
@@ -76,8 +85,16 @@ pub fn decode(packet: &Packet<'_>) -> Result<ServiceSettingsMessage> {
                 settings: ServiceSettings::UdpListener(s),
             })
         }
+        ServiceType::TcpServer => {
+            let s: TcpServerSettings = rmp_serde::from_slice(packet.payload)?;
+            validate_tcp_server(&s)?;
+            Ok(ServiceSettingsMessage {
+                service,
+                settings: ServiceSettings::TcpServer(s),
+            })
+        }
         ServiceType::Undefined => anyhow::bail!("ServiceSettings service type is Undefined"),
-        ServiceType::TcpServer | ServiceType::NtpClient => {
+        ServiceType::NtpClient => {
             anyhow::bail!("ServiceSettings for {:?} is not implemented", service);
         }
     }
@@ -102,6 +119,16 @@ fn validate_udp_listener(s: &UdpListenerSettings) -> Result<()> {
     }
     if s.service_id.as_bytes().len() > 32 {
         anyhow::bail!("UDP listener serviceId too long: {} bytes", s.service_id.as_bytes().len());
+    }
+    Ok(())
+}
+
+fn validate_tcp_server(s: &TcpServerSettings) -> Result<()> {
+    if s.port == 0 {
+        anyhow::bail!("TCP server port must be in 1..=65535");
+    }
+    if s.client_timeout > 600 {
+        anyhow::bail!("TCP server clientTimeout out of range: {}", s.client_timeout);
     }
     Ok(())
 }

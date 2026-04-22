@@ -280,17 +280,6 @@ pub fn spawn_task(
         .map_err(|err| anyhow::anyhow!("failed to spawn WiFiStation task: {err}"))
 }
 
-pub fn mock_settings() -> WiFiStationSettings {
-    WiFiStationSettings {
-        enabled: true,
-        ssid: "Test123".into(),
-        password: "12345678".into(),
-        reconnect_period: 15,
-        dhcp: true,
-        static_config: None,
-    }
-}
-
 fn recv_next_or_stop(
     rx: &mpsc::Receiver<WiFiStationSettings>,
 ) -> Result<WiFiStationSettings, ()> {

@@ -31,18 +31,6 @@ struct AdvertiseResponse<'a> {
     port: u16,
 }
 
-/// Test defaults aligned with the protocol example (until master sends real `ServiceSettings`).
-pub fn mock_settings() -> UdpListenerSettings {
-    UdpListenerSettings {
-        request_ports: vec![47701, 23629],
-        response_ports: vec![23569, 21913],
-        request_type: "XXX".into(),
-        service_id: "YYY".into(),
-        device_type: 0,
-        port: 8000,
-    }
-}
-
 /// Waits for `UdpListenerSettings` from the master, then binds UDP on `0.0.0.0` for each
 /// `requestPorts` entry, receives broadcast/unicast JSON `{"type": "<requestType>"}`, and
 /// replies to `client_ip:responsePorts[rr]` (round-robin) with the advertise JSON.

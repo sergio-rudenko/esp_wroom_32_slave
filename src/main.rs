@@ -43,6 +43,12 @@ fn main() -> Result<()> {
         mpsc::channel::<master::messages::interface_settings::EthernetSettings>();
     let (udp_listener_settings_sender, udp_listener_settings_receiver) =
         mpsc::channel::<master::messages::service_settings::UdpListenerSettings>();
+    let (tcp_server_settings_sender, tcp_server_settings_receiver) =
+        mpsc::channel::<master::messages::service_settings::TcpServerSettings>();
+    let (tcp_server_command_sender, tcp_server_command_receiver) =
+        mpsc::channel::<master::messages::tcp_command::TcpCommandMessage>();
+    let (tcp_server_data_sender, tcp_server_data_receiver) =
+        mpsc::channel::<master::messages::tcp_data::TcpDataMessage>();
     let lwip_socket_gate = Arc::new(AtomicU8::new(0));
 
     thread::Builder::new()
@@ -107,14 +113,18 @@ fn main() -> Result<()> {
 
     services::udp_listener::spawn_task(
         udp_listener_settings_receiver,
-        lwip_socket_gate,
+        lwip_socket_gate.clone(),
         LWIP_STACK_DRIVER_TASKS,
     )?;
 
-    // Mock interface / service config until real master-side flow is fully integrated.
-    let _ = wifi_station_interface_settings_sender.send(network::wifi_station::mock_settings());
-    let _ = ethernet_interface_settings_sender.send(network::ethernet::mock_settings());
-    let _ = udp_listener_settings_sender.send(services::udp_listener::mock_settings());
+    services::tcp_server::spawn_task(
+        tcp_server_settings_receiver,
+        tcp_server_command_receiver,
+        tcp_server_data_receiver,
+        uart_tx_queue_sender.clone(),
+        lwip_socket_gate,
+        LWIP_STACK_DRIVER_TASKS,
+    )?;
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
@@ -145,9 +155,38 @@ fn main() -> Result<()> {
                                             info!("Enqueued UdpListener service settings");
                                         }
                                     }
+                                    master::messages::service_settings::ServiceSettings::TcpServer(
+                                        cfg,
+                                    ) => {
+                                        if let Err(err) = tcp_server_settings_sender.send(cfg) {
+                                            warn!("Failed to enqueue TcpServer settings: {err}");
+                                        } else {
+                                            info!("Enqueued TcpServer service settings");
+                                        }
+                                    }
                                 }
                             }
                             Err(err) => warn!("RX ServiceSettings decode failed: {err:#}"),
+                        }
+                    } else if packet.cmd == master::protocol::MessageType::TcpCommand.as_u8() {
+                        match master::messages::tcp_command::decode(&packet) {
+                            Ok(cmd) => {
+                                info!("RX TcpCommand: index={}, close={}", cmd.index, cmd.command.close);
+                                if let Err(err) = tcp_server_command_sender.send(cmd) {
+                                    warn!("Failed to enqueue TcpCommand: {err}");
+                                }
+                            }
+                            Err(err) => warn!("RX TcpCommand decode failed: {err:#}"),
+                        }
+                    } else if packet.cmd == master::protocol::MessageType::TcpData.as_u8() {
+                        match master::messages::tcp_data::decode(&packet) {
+                            Ok(msg) => {
+                                info!("RX TcpData: index={}, bytes={}", msg.index, msg.payload.len());
+                                if let Err(err) = tcp_server_data_sender.send(msg) {
+                                    warn!("Failed to enqueue TcpData: {err}");
+                                }
+                            }
+                            Err(err) => warn!("RX TcpData decode failed: {err:#}"),
                         }
                     } else if packet.cmd == master::protocol::MessageType::InterfaceSettings.as_u8() {
                         match master::messages::interface_settings::decode(&packet) {

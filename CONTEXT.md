@@ -10,7 +10,7 @@ Embedded Rust firmware for `ESP32-WROOM-32UE` with:
 - UART1 link to host controller (`STM32`)
 - Wi-Fi (`STA` + future `AP`)
 - Ethernet (`LAN8720A-CP`)
-- Services (UDP discovery listener done; **TCP Server** next)
+- Services (UDP discovery listener and TCP server done; **NTP Client** next)
 - Maximum stability over novelty
 
 ## Chosen stack
@@ -36,20 +36,33 @@ Implemented:
   - `SOF(0xAA) + LEN(u16 LE payload size) + CMD + PARAM + PAYLOAD + CRC16-CCITT`
 - READY message (encode only): periodic until first master frame; real ESP reset reason
 - Message modules under `src/master/messages`:
-  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**
+  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**, **`service_state`**, **`tcp_command`**, **`tcp_data`**
 - `InterfaceSettings` decode (MsgPack), validation, RX routing to Wi-Fi STA and Ethernet tasks
-- **`ServiceSettings`** decode for **`ServiceType::UdpListener`** (MsgPack JSON fields: `requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`). `TcpServer` / `NtpClient` return “not implemented” until those features exist
+- **`ServiceSettings`** decode for:
+  - `ServiceType::UdpListener` (`requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`)
+  - `ServiceType::TcpServer` (`port`, `clientTimeout`)
+  - `ServiceType::NtpClient` still not implemented
 - Wi-Fi STA task (`wifi_station.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
 - Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
 - **UDP listener** (`services/udp_listener.rs`):
   - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
   - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
-- **`check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
-- Dev **mocks** in `main` for Wi-Fi, Ethernet, UDP listener (remove when STM32 owns config)
+- **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
+- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings` TX + ESP frame decode; param logging for `TcpData`/`TcpCommand` as slot index)
+- **TCP server** (`services/tcp_server.rs`) implemented:
+  - listens on `0.0.0.0:port` from `ServiceSettings(TcpServer)`
+  - max 4 simultaneous clients (`index` 0..3)
+  - emits `ServiceState` on connect/disconnect (`ClientClosedConnection`, `ServerClosedConnection`, `InactivityTimeout`, `NotConnected`)
+  - bridges client bytes to master as `TcpData`; accepts inbound `TcpData` from master and writes to socket
+  - supports `TcpCommand { close: true }` from master
+- Large stream note:
+  - `TcpData` is forwarded over UART `115200`; TX queue is unbounded
+  - sustained large bursts (100KB+) can accumulate backlog in RAM and increase latency/instability risk
+  - practical safe burst target without flow control: ~`32..64KB`
 
 Not implemented yet:
 
-- **TCP Server** service (next git-flow feature): `ServiceSettings` for `ServiceType::TcpServer`, accept pool, protocol toward STM32
+- **NTP Client** service (next git-flow feature): `ServiceSettings` for `ServiceType::NtpClient`
 - Wi-Fi AP runtime task
 - Applying static IP for STA/Ethernet when `dhcp=false` in `InterfaceSettings`
 
@@ -118,7 +131,7 @@ Errors solved during recovery:
 
 ## Next engineering steps
 
-1. **TCP Server** (`feature/TCP-Server`): decode `ServiceSettings` for `TcpServer`, dedicated task, `std::net::TcpListener` or IDF-friendly accept loop, bridge to UART/protocol as designed.
+1. **NTP Client** (`feature/NTP-Client`): decode/apply `ServiceSettings` for `NtpClient`, periodic sync and service state reporting.
 2. Apply static IP from `InterfaceSettings` when `dhcp=false` (Wi-Fi STA and Ethernet).
 3. Wi-Fi AP task and mixed STA+AP policy.
 4. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
