@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_DIR="$PROJECT_ROOT/target/xtensa-esp32-espidf/release"
-ELF_PATH="$TARGET_DIR/esp32-uart-slave-controller2"
+ELF_PATH="$TARGET_DIR/esp_wroom_32_slave"
 APP_IMAGE_PATH="$TARGET_DIR/app-image.bin"
 BOOTLOADER_PATH="$TARGET_DIR/bootloader.bin"
 PARTITION_TABLE_PATH="$TARGET_DIR/partition-table.bin"

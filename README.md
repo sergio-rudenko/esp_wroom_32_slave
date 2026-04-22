@@ -1,4 +1,4 @@
-# ESP32 UART Slave Controller 2
+# esp_wroom_32_slave
 
 Прошивка для `ESP32-WROOM-32UE`, где `ESP32` работает как сетевой сопроцессор под управлением `STM32` по UART.
 
@@ -29,7 +29,7 @@
 
 ```bash
 git clone <URL_репозитория>
-cd esp32-uart-slave-conroller2
+cd esp_wroom_32_slave
 ```
 
 ### 2.2. Установка toolchain
@@ -66,6 +66,8 @@ pip install esptool
 Результат:
 
 - `firmware.bin` в корне проекта.
+- используется проектная `partitions.csv` (увеличенный `factory` раздел для текущего размера приложения);
+- скрипт автоматически подготавливает `partitions.csv` для `esp-idf-sys` build out-директорий.
 
 ### 2.5. Прошивка
 
@@ -89,14 +91,16 @@ espflash monitor --baud 115200 --port /dev/ttyUSB0
 SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 ```
 
-Поля:
+Контракт полей фрейма:
 
-- `SOF`: стартовый байт `0xAA`;
-- `LEN`: длина `PAYLOAD` (не всего кадра);
-- `CMD`: тип сообщения (`MessageType`);
-- `PARAM`: дополнительный параметр (тип интерфейса/сервиса, индекс TCP-слота, индекс чанка и т.п.);
-- `PAYLOAD`: полезные данные (MsgPack JSON или raw bytes);
-- `CRC16`: CRC16-CCITT по заголовку+payload (без CRC).
+| Поле | Размер | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---:|---|---|---|---|
+| `SOF` | 1 байт | `u8` | Да | `0xAA` | Маркер начала кадра |
+| `LEN` | 2 байта | `u16 LE` | Да | `0..1500` | Длина `PAYLOAD` в байтах |
+| `CMD` | 1 байт | `u8` | Да | `MessageType` | Тип сообщения |
+| `PARAM` | 1 байт | `u8` | Да | зависит от `CMD` | Подтип/индекс/код причины |
+| `PAYLOAD` | `LEN` | `bytes` | Да | MsgPack JSON или raw | Тело сообщения |
+| `CRC16` | 2 байта | `u16 LE` | Да | CRC16-CCITT | Контроль целостности по `SOF..PAYLOAD` |
 
 ### 3.2. Основные `MessageType`
 
@@ -109,6 +113,19 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - `TcpData` — двунаправленно;
 - `WifiScan` — двунаправленно.
 
+Контракт `CMD`:
+
+| `CMD` | `MessageType` | Направление | `PARAM` | `PAYLOAD` |
+|---:|---|---|---|---|
+| `1` | `Ready` | `ESP32 -> STM32` | `BootReason` | пусто |
+| `2` | `InterfaceSettings` | `STM32 -> ESP32` | `InterfaceType` | MsgPack JSON |
+| `3` | `InterfaceState` | `ESP32 -> STM32` | `InterfaceType` | MsgPack JSON |
+| `4` | `ServiceSettings` | `STM32 -> ESP32` | `ServiceType` | MsgPack JSON |
+| `5` | `ServiceState` | `ESP32 -> STM32` | `ServiceType` | MsgPack JSON |
+| `6` | `TcpCommand` | `STM32 -> ESP32` | `index (0..3)` | MsgPack JSON |
+| `7` | `TcpData` | `<->` | `index (0..3)` | raw bytes |
+| `8` | `WifiScan` | `<->` | request:`0`, response:`chunk_index` | MsgPack JSON |
+
 ### 3.3. READY
 
 `ESP32` отправляет `Ready`:
@@ -116,7 +133,7 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - при старте;
 - каждые 5 секунд, пока не получен первый валидный кадр от мастера.
 
-`PARAM` содержит `BootReason`.
+`PARAM` содержит `BootReason` (контракт в таблице 3.4).
 
 ### 3.4. Политика WDT и `BootReason`
 
@@ -137,6 +154,11 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - `tcp-server`
 - `ntp-client`
 
+Особенности реализации:
+
+- если TWDT уже инициализирован рантаймом ESP-IDF, прошивка переиспользует его и делает reconfigure до `10s`;
+- при раннем завершении задачи (например, `eth-task` при отсутствии PHY на макетной плате) задача отписывается от WDT, чтобы не вызывать ложный reset из-за "мертвого" pthread.
+
 После рестарта `ESP32` отправляет `Ready`, где `PARAM` содержит причину сброса.  
 Для watchdog сценариев это обычно:
 
@@ -147,22 +169,24 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 
 Полный список `BootReason`:
 
-- `0` `Undefined`
-- `1` `Power`
-- `2` `External`
-- `3` `Software`
-- `4` `Panic`
-- `5` `InterruptWatchdog`
-- `6` `TaskWatchdog`
-- `7` `OtherWatchdog`
-- `8` `DeepSleep`
-- `9` `Brownout`
-- `10` `Sdio`
-- `11` `Usb`
-- `12` `Jtag`
-- `13` `Efuse`
-- `14` `PowerGlitch`
-- `15` `CpuLockup`
+| `PARAM` | `BootReason` | Описание |
+|---:|---|---|
+| `0` | `Undefined` | Причина не определена |
+| `1` | `Power` | Подача питания |
+| `2` | `External` | Внешний reset |
+| `3` | `Software` | Программный reset |
+| `4` | `Panic` | Panic/abort |
+| `5` | `InterruptWatchdog` | Interrupt WDT |
+| `6` | `TaskWatchdog` | Task WDT |
+| `7` | `OtherWatchdog` | Иной WDT reset |
+| `8` | `DeepSleep` | Выход из deep sleep |
+| `9` | `Brownout` | Brownout reset |
+| `10` | `Sdio` | SDIO reset |
+| `11` | `Usb` | USB reset |
+| `12` | `Jtag` | JTAG reset |
+| `13` | `Efuse` | eFuse reset |
+| `14` | `PowerGlitch` | Сбой питания |
+| `15` | `CpuLockup` | CPU lockup |
 
 ---
 
@@ -200,13 +224,16 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `InterfaceSettings/WiFiStation`:
 
-- `enabled`: включить/выключить STA;
-- `ssid`, `password`: учетные данные;
-- `reconnectPeriod`: период переподключения (сек);
-- `dhcp`: DHCP (`true`) или static (`false`);
-- `static`: `ip, mask, gateway, dns1, dns2`.
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `enabled` | `bool` | Да | `true/false` | Включить/выключить STA |
+| `ssid` | `string` | Да | `1..32` байта | SSID |
+| `password` | `string` | Да | `0..64` байта | Пароль (`""` для open) |
+| `reconnectPeriod` | `u16` | Нет | `1..600`, default `15` | Период reconnect, сек |
+| `dhcp` | `bool` | Да | `true/false` | Режим IP |
+| `static` | `string[5]` | Усл. | `dhcp=false` | `[ip, mask, gw, dns1, dns2]` |
 
 `InterfaceState` (примерные события):
 
@@ -242,13 +269,16 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `InterfaceSettings/WiFiAccessPoint`:
 
-- `enabled`: включить/выключить AP;
-- `ssid`, `password`: параметры точки доступа;
-- `channel`: Wi-Fi канал;
-- `maxClients`: максимум клиентов;
-- `static`: IP AP и mask (AP работает со static IP).
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `enabled` | `bool` | Да | `true/false` | Включить/выключить AP |
+| `ssid` | `string` | Да | `1..32` байта | SSID AP |
+| `password` | `string` | Да | `8..64` байта или `""` | Пароль AP |
+| `channel` | `u8` | Да | `1..14` | Wi-Fi канал |
+| `maxClients` | `u8` | Да | `1..10` | Макс. число клиентов |
+| `static` | `string[2]` | Да | `[ip, mask]` | Статический IP AP |
 
 `InterfaceState`:
 
@@ -287,11 +317,13 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `InterfaceSettings/Ethernet`:
 
-- `enabled`: включить/выключить Ethernet;
-- `dhcp`: DHCP или static;
-- `static`: `ip, mask, gateway, dns1, dns2`.
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `enabled` | `bool` | Да | `true/false` | Включить/выключить Ethernet |
+| `dhcp` | `bool` | Да | `true/false` | Режим IP |
+| `static` | `string[5]` | Усл. | `dhcp=false` | `[ip, mask, gw, dns1, dns2]` |
 
 Состояния отправляются через `InterfaceState` аналогично STA (подключение, IP, ошибки, disconnect).
 
@@ -326,14 +358,16 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `ServiceSettings/UDPListener`:
 
-- `requestPorts`: порты приема broadcast-запросов (до 2);
-- `responsePorts`: порты ответа (до 2, round-robin);
-- `requestType`: ожидаемый `type` в запросе;
-- `serviceId`: идентификатор сервиса;
-- `deviceType`: тип устройства (`uint16`);
-- `port`: TCP-порт, который рекламируется клиенту.
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `requestPorts` | `u16[]` | Да | `1..2` элемента, `1..65535` | Порты приема запросов |
+| `responsePorts` | `u16[]` | Да | `1..2` элемента, `1..65535` | Порты ответов (round-robin) |
+| `requestType` | `string` | Да | непустая строка | Ожидаемый `type` в запросе |
+| `serviceId` | `string` | Да | `1..32` байта | Идентификатор сервиса |
+| `deviceType` | `u16` | Да | `0..65535` | Тип устройства |
+| `port` | `u16` | Да | `1..65535` | Рекламируемый TCP-порт |
 
 Формат запроса:
 
@@ -360,10 +394,12 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `ServiceSettings/TCPServer`:
 
-- `port`: порт `0.0.0.0:port`;
-- `clientTimeout`: таймаут неактивности в секундах (`0` — выключен).
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `port` | `u16` | Да | `1..65535` | Порт слушателя |
+| `clientTimeout` | `u16` | Да | `0..600` | Таймаут неактивности, сек (`0`=off) |
 
 Ограничения:
 
@@ -391,12 +427,14 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-`reason` (`TCPDisconnectReason`):
+Контракт `ServiceState/TCPServer.reason`:
 
-- `1` ClientClosedConnection
-- `2` ServerClosedConnection
-- `3` InactivityTimeout
-- `4` NotConnected
+| Код | `TCPDisconnectReason` | Описание |
+|---:|---|---|
+| `1` | `ClientClosedConnection` | Клиент закрыл соединение |
+| `2` | `ServerClosedConnection` | Сервер закрыл соединение |
+| `3` | `InactivityTimeout` | Таймаут неактивности |
+| `4` | `NotConnected` | Попытка операции с неактивным слотом |
 
 Передача данных:
 
@@ -427,12 +465,14 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 }
 ```
 
-Поля:
+Контракт payload `ServiceSettings/NTPClient`:
 
-- `enabled`: включить/выключить NTP;
-- `timezone`: смещение от UTC в минутах;
-- `resyncPeriod`: период ресинка в минутах;
-- `servers`: до 3 серверов по приоритету.
+| Поле | Тип | Обяз. | Диапазон/формат | Описание |
+|---|---|---|---|---|
+| `enabled` | `bool` | Да | `true/false` | Включить/выключить NTP |
+| `timezone` | `i32` | Да | минуты UTC offset | Смещение относительно UTC |
+| `resyncPeriod` | `u16` | Нет | `1..1440`, default `15` | Интервал ресинка, минуты |
+| `servers` | `string[]` | Да | `1..3` элемента | Список NTP-серверов по приоритету |
 
 `ServiceState` при успехе:
 
