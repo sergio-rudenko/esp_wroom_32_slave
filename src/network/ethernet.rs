@@ -1,12 +1,20 @@
 use anyhow::Result;
+use esp_idf_hal::sys::EspError;
 use esp_idf_hal::gpio::{
     AnyOutputPin, Gpio0, Gpio16, Gpio17, Gpio18, Gpio19, Gpio21, Gpio22, Gpio23, Gpio25, Gpio26,
     Gpio27,
 };
 use esp_idf_hal::mac::MAC;
+use esp_idf_svc::handle::RawHandle;
+use esp_idf_sys::{
+    esp_ip4_addr_t, esp_netif_dhcpc_start, esp_netif_dhcpc_stop, esp_netif_dns_info_t,
+    esp_netif_dns_type_t_ESP_NETIF_DNS_BACKUP, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
+    esp_netif_ip_info_t, esp_netif_set_dns_info, esp_netif_set_ip_info,
+};
 use esp_idf_svc::eth::{BlockingEth, EspEth, EthDriver, RmiiClockConfig, RmiiEth, RmiiEthChipset};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use log::*;
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -74,8 +82,8 @@ pub fn spawn_task(
             };
             lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
-            let mut cfg = match ethernet_interface_settings_receiver.recv() {
-                Ok(cfg) => cfg,
+            let mut settings = match ethernet_interface_settings_receiver.recv() {
+                Ok(settings) => settings,
                 Err(_) => {
                     info!("Ethernet task stopped: event channel closed before first config");
                     return;
@@ -85,9 +93,9 @@ pub fn spawn_task(
             let mut link_registered = false;
 
             loop {
-                info!("Ethernet settings: enabled={}, dhcp={}", cfg.enabled, cfg.dhcp);
+                info!("Ethernet settings: enabled={}, dhcp={}", settings.enabled, settings.dhcp);
 
-                if !cfg.enabled {
+                if !settings.enabled {
                     if link_registered {
                         connected_links.fetch_sub(1, Ordering::SeqCst);
                         link_registered = false;
@@ -103,15 +111,25 @@ pub fn spawn_task(
                         );
                     }
 
-                    cfg = match recv_next_or_stop(&ethernet_interface_settings_receiver) {
-                        Ok(next) => next,
+                    settings = match recv_next_or_stop(&ethernet_interface_settings_receiver) {
+                        Ok(next_settings) => next_settings,
                         Err(()) => return,
                     };
                     continue;
                 }
 
-                if !cfg.dhcp {
-                    info!("Ethernet static config requested (not applied yet): {:?}", cfg.static_config);
+                if let Err(err) = apply_eth_ip_settings(&mut eth, &settings) {
+                    warn!("Ethernet IP settings apply failed: {err:#}");
+                    send_interface_state(
+                        &uart_tx_queue_sender,
+                        interface_state::encode_connect_error(InterfaceType::Ethernet, err.code()),
+                        "ethernet_connect_error",
+                    );
+                    settings = match recv_next_or_stop(&ethernet_interface_settings_receiver) {
+                        Ok(next_settings) => next_settings,
+                        Err(()) => return,
+                    };
+                    continue;
                 }
 
                 if let Err(err) = eth.start() {
@@ -173,12 +191,12 @@ pub fn spawn_task(
                                         &uart_tx_queue_sender,
                                         LINK_MONITOR_POLL_MS,
                                     ) {
-                                        Ok(Some(next_cfg)) => {
+                                        Ok(Some(next_settings)) => {
                                             if link_registered {
                                                 connected_links.fetch_sub(1, Ordering::SeqCst);
                                                 link_registered = false;
                                             }
-                                            cfg = next_cfg;
+                                            settings = next_settings;
                                             continue;
                                         }
                                         Ok(None) => {
@@ -224,9 +242,9 @@ pub fn spawn_task(
                 }
 
                 match ethernet_interface_settings_receiver.recv_timeout(Duration::from_secs(5)) {
-                    Ok(next_cfg) => {
+                    Ok(next_settings) => {
                         info!("Ethernet got updated config");
-                        cfg = next_cfg;
+                        settings = next_settings;
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         // keep current config and retry
@@ -249,7 +267,7 @@ fn recv_next_or_stop(
     rx: &mpsc::Receiver<EthernetSettings>,
 ) -> Result<EthernetSettings, ()> {
     match rx.recv() {
-        Ok(cfg) => Ok(cfg),
+        Ok(next_settings) => Ok(next_settings),
         Err(_) => {
             info!("Ethernet task stopped: event channel closed");
             Err(())
@@ -266,7 +284,7 @@ fn monitor_link_state(
     let mut last_report = Instant::now();
     loop {
         match ethernet_interface_settings_receiver.try_recv() {
-            Ok(next_cfg) => return Ok(Some(next_cfg)),
+            Ok(next_settings) => return Ok(Some(next_settings)),
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => return Err(()),
         }
@@ -315,4 +333,104 @@ fn format_mac(mac: [u8; 6]) -> String {
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     )
+}
+
+#[derive(Clone, Debug)]
+struct StaticClientSettings {
+    ip: Ipv4Addr,
+    netmask: Ipv4Addr,
+    gateway: Ipv4Addr,
+    dns: Option<Ipv4Addr>,
+    secondary_dns: Option<Ipv4Addr>,
+}
+
+fn apply_eth_ip_settings(
+    eth: &mut BlockingEth<EspEth<'_, RmiiEth>>,
+    settings: &EthernetSettings,
+) -> Result<(), EspError> {
+    let netif_handle = eth.eth().netif().handle();
+
+    if settings.dhcp {
+        let _ = EspError::convert(unsafe { esp_netif_dhcpc_start(netif_handle) });
+        info!("Ethernet IP mode: DHCP");
+        return Ok(());
+    }
+
+    let static_settings = parse_static_client_settings(
+        settings
+            .static_config
+            .as_ref()
+            .ok_or_else(|| EspError::from_infallible::<{ esp_idf_sys::ESP_ERR_INVALID_ARG }>())?,
+    )?;
+
+    let ip_info = esp_netif_ip_info_t {
+        ip: ipv4_to_esp(static_settings.ip),
+        netmask: ipv4_to_esp(static_settings.netmask),
+        gw: ipv4_to_esp(static_settings.gateway),
+    };
+
+    EspError::convert(unsafe { esp_netif_dhcpc_stop(netif_handle) })?;
+    EspError::convert(unsafe { esp_netif_set_ip_info(netif_handle, &ip_info) })?;
+    set_dns_info(netif_handle, static_settings.dns, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN)?;
+    set_dns_info(
+        netif_handle,
+        static_settings.secondary_dns,
+        esp_netif_dns_type_t_ESP_NETIF_DNS_BACKUP,
+    )?;
+    info!(
+        "Ethernet IP mode: static ip={}, mask={}, gw={}, dns={:?}, dns2={:?}",
+        static_settings.ip,
+        static_settings.netmask,
+        static_settings.gateway,
+        static_settings.dns,
+        static_settings.secondary_dns
+    );
+    Ok(())
+}
+
+fn parse_static_client_settings(values: &[String]) -> Result<StaticClientSettings, EspError> {
+    if values.len() != 5 {
+        return Err(EspError::from_infallible::<{ esp_idf_sys::ESP_ERR_INVALID_ARG }>());
+    }
+
+    Ok(StaticClientSettings {
+        ip: parse_ipv4(&values[0])?,
+        netmask: parse_ipv4(&values[1])?,
+        gateway: parse_ipv4(&values[2])?,
+        dns: parse_optional_ipv4(&values[3])?,
+        secondary_dns: parse_optional_ipv4(&values[4])?,
+    })
+}
+
+fn parse_ipv4(value: &str) -> Result<Ipv4Addr, EspError> {
+    value
+        .parse::<Ipv4Addr>()
+        .map_err(|_| EspError::from_infallible::<{ esp_idf_sys::ESP_ERR_INVALID_ARG }>())
+}
+
+fn parse_optional_ipv4(value: &str) -> Result<Option<Ipv4Addr>, EspError> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_ipv4(value).map(Some)
+    }
+}
+
+fn set_dns_info(
+    netif_handle: *mut esp_idf_sys::esp_netif_t,
+    dns: Option<Ipv4Addr>,
+    dns_type: u32,
+) -> Result<(), EspError> {
+    let mut dns_info: esp_netif_dns_info_t = Default::default();
+    dns_info.ip.u_addr.ip4 = match dns {
+        Some(addr) => ipv4_to_esp(addr),
+        None => esp_ip4_addr_t { addr: 0 },
+    };
+    EspError::convert(unsafe { esp_netif_set_dns_info(netif_handle, dns_type, &mut dns_info) })
+}
+
+fn ipv4_to_esp(ip: Ipv4Addr) -> esp_ip4_addr_t {
+    esp_ip4_addr_t {
+        addr: u32::to_be(u32::from_be_bytes(ip.octets())),
+    }
 }

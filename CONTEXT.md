@@ -36,19 +36,28 @@ Implemented:
   - `SOF(0xAA) + LEN(u16 LE payload size) + CMD + PARAM + PAYLOAD + CRC16-CCITT`
 - READY message (encode only): periodic until first master frame; real ESP reset reason
 - Message modules under `src/master/messages`:
-  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**, **`service_state`**, **`tcp_command`**, **`tcp_data`**
+  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**, **`service_state`**, **`tcp_command`**, **`tcp_data`**, **`wifi_scan`**
 - `InterfaceSettings` decode (MsgPack), validation, RX routing to Wi-Fi STA and Ethernet tasks
 - **`ServiceSettings`** decode for:
   - `ServiceType::UdpListener` (`requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`)
   - `ServiceType::TcpServer` (`port`, `clientTimeout`)
   - `ServiceType::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
 - Wi-Fi STA task (`wifi_station.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
+- Wi-Fi STA and Ethernet now apply `dhcp`/`static` from `InterfaceSettings`:
+  - `dhcp=true`: DHCP client mode
+  - `dhcp=false`: static `ip/netmask/gateway/dns/secondary_dns` is parsed and applied to netif
 - Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
+- `WifiScan` message flow implemented:
+  - inbound (`STM32 -> ESP32`): MsgPack `{ "limit": N }`, `PARAM=0`
+  - handled by `wifi_station` task, which performs Wi-Fi scan
+  - outbound (`ESP32 -> STM32`): MsgPack array of AP objects `{ssid,bssid,channel,rssi,authMethod}`
+  - responses are chunked by `MAX_PAYLOAD_SIZE`, `PARAM` carries chunk index (`0..`)
+  - empty result is sent as MsgPack-encoded empty array `[]` in chunk `PARAM=0`
 - **UDP listener** (`services/udp_listener.rs`):
   - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
   - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
 - **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
-- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings` TX + ESP frame decode; param logging for `TcpData`/`TcpCommand` as slot index)
+- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings`/`WifiScan` TX + ESP frame decode; param logging for `TcpData`/`TcpCommand` as slot index; `--send-wifi-scan --wifi-scan-limit` sends one scan request after 5 seconds)
 - **TCP server** (`services/tcp_server.rs`) implemented:
   - listens on `0.0.0.0:port` from `ServiceSettings(TcpServer)`
   - max 4 simultaneous clients (`index` 0..3)
@@ -68,7 +77,6 @@ Implemented:
 Not implemented yet:
 
 - Wi-Fi AP runtime task
-- Applying static IP for STA/Ethernet when `dhcp=false` in `InterfaceSettings`
 
 ## Build/toolchain notes
 
@@ -135,6 +143,6 @@ Errors solved during recovery:
 
 ## Next engineering steps
 
-1. Apply static IP from `InterfaceSettings` when `dhcp=false` (Wi-Fi STA and Ethernet).
-2. Wi-Fi AP task and mixed STA+AP policy.
+1. Wi-Fi AP task and mixed STA+AP policy.
+2. Add explicit status/error signaling for `WifiScan` execution failures/timeouts.
 3. Optional: timeout/retry/watchdog policy around master communication and network state transitions.

@@ -37,14 +37,20 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
   - `service_state` (outbound only, encode for TCP server connection state)
   - `tcp_command` (inbound only, decode; close command for connection index)
   - `tcp_data` (bidirectional, encode/decode; raw payload for connection index)
+  - `wifi_scan` (bidirectional, encode/decode; request from master and chunked AP list response)
 - RX decode wired for `InterfaceSettings`, `ServiceSettings`, `TcpCommand`, and `TcpData` with routing to tasks
 - Wi-Fi STA task (`src/network/wifi_station.rs`):
   - receives `WiFiStationSettings` from channel
   - applies STA config and connects/reconnects
+  - applies IP mode from settings:
+    - DHCP mode (`dhcp=true`)
+    - static mode (`dhcp=false`) with `ip/netmask/gateway/dns/dns2`
   - monitors link state and emits `InterfaceState` to STM32 (connected, connect_error, got_ip, rssi, disconnected)
+  - handles `WifiScan` requests and sends chunked scan responses (`PARAM = chunk index`)
   - after `EspWifi` / lwIP init, bumps a shared gate counter so UDP sockets do not race tcpip startup
 - Ethernet LAN8720 RMII task (`src/network/ethernet.rs`):
   - same pattern as STA; pinout documented in code
+  - applies IP mode from settings (DHCP or static `ip/netmask/gateway/dns/dns2`)
   - bumps the same lwIP gate after `EthDriver` / `BlockingEth` init
 - UDP discovery listener (`src/services/udp_listener.rs`):
   - waits for `UdpListenerSettings` from master
@@ -67,7 +73,7 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
   - UART is `115200` and outbound queue is unbounded; very large bursts (100KB+) can build backlog in RAM
   - practical "safe burst" target is about `32..64KB` per transfer unless application-level flow control is added
 - Host-side check script: `tools/check_udp_listener.py` (broadcast IP argument, logs send/recv once per second)
-- Host-side STM32 replacement over UART: `tools/mock_master_uart.py` (sends `InterfaceSettings`, decodes ESP32 frames)
+- Host-side STM32 replacement over UART: `tools/mock_master_uart.py` (sends `InterfaceSettings`/`ServiceSettings`/`WifiScan`, decodes ESP32 frames including `WifiScan` chunks)
 - `sdkconfig.defaults` prefilled for LAN8720 RMII baseline
 
 ## Build/flash (first setup)
@@ -95,6 +101,7 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 - `src/master/messages/service_state.rs` — ServiceState encode helpers for TCP service
 - `src/master/messages/tcp_command.rs` — TcpCommand decode
 - `src/master/messages/tcp_data.rs` — TcpData encode/decode (STM32 <-> ESP32)
+- `src/master/messages/wifi_scan.rs` — WifiScan request/response encode/decode + AP response item model
 - `src/network/wifi_station.rs` — Wi-Fi STA task
 - `src/network/ethernet.rs` — Ethernet task
 - `src/services/udp_listener.rs` — UDP discovery listener task
@@ -103,7 +110,6 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 
 ## Next steps
 
-- **NTP Client** service (`ServiceType::NtpClient` in `ServiceSettings`)
 - Wi-Fi AP runtime task (`WiFiAccessPoint` in `InterfaceSettings`)
-- Apply static IP from `InterfaceSettings` when `dhcp=false` (STA and Ethernet)
+- Add scan timeout/result-status signaling to `WifiScan` (explicit error reporting to master)
 - Extend `InterfaceState` as new events appear

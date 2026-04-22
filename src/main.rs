@@ -51,6 +51,8 @@ fn main() -> Result<()> {
         mpsc::channel::<master::messages::tcp_command::TcpCommandMessage>();
     let (tcp_server_data_sender, tcp_server_data_receiver) =
         mpsc::channel::<master::messages::tcp_data::TcpDataMessage>();
+    let (wifi_scan_sender, wifi_scan_receiver) =
+        mpsc::channel::<master::messages::wifi_scan::WifiScanRequestMessage>();
     let lwip_socket_gate = Arc::new(AtomicU8::new(0));
     let connected_links = Arc::new(AtomicU8::new(0));
 
@@ -93,6 +95,7 @@ fn main() -> Result<()> {
         sysloop.clone(),
         nvs,
         wifi_station_interface_settings_receiver,
+        wifi_scan_receiver,
         uart_tx_queue_sender.clone(),
         lwip_socket_gate.clone(),
         connected_links.clone(),
@@ -160,27 +163,27 @@ fn main() -> Result<()> {
                                 );
                                 match msg.settings {
                                     master::messages::service_settings::ServiceSettings::UdpListener(
-                                        cfg,
+                                        settings,
                                     ) => {
-                                        if let Err(err) = udp_listener_settings_sender.send(cfg) {
+                                        if let Err(err) = udp_listener_settings_sender.send(settings) {
                                             warn!("Failed to enqueue UdpListener settings: {err}");
                                         } else {
                                             info!("Enqueued UdpListener service settings");
                                         }
                                     }
                                     master::messages::service_settings::ServiceSettings::TcpServer(
-                                        cfg,
+                                        settings,
                                     ) => {
-                                        if let Err(err) = tcp_server_settings_sender.send(cfg) {
+                                        if let Err(err) = tcp_server_settings_sender.send(settings) {
                                             warn!("Failed to enqueue TcpServer settings: {err}");
                                         } else {
                                             info!("Enqueued TcpServer service settings");
                                         }
                                     }
                                     master::messages::service_settings::ServiceSettings::NtpClient(
-                                        cfg,
+                                        settings,
                                     ) => {
-                                        if let Err(err) = ntp_client_settings_sender.send(cfg) {
+                                        if let Err(err) = ntp_client_settings_sender.send(settings) {
                                             warn!("Failed to enqueue NtpClient settings: {err}");
                                         } else {
                                             info!("Enqueued NtpClient service settings");
@@ -210,16 +213,26 @@ fn main() -> Result<()> {
                             }
                             Err(err) => warn!("RX TcpData decode failed: {err:#}"),
                         }
+                    } else if packet.cmd == master::protocol::MessageType::WifiScan.as_u8() {
+                        match master::messages::wifi_scan::decode(&packet) {
+                            Ok(request) => {
+                                info!("RX WifiScan: limit={}", request.limit);
+                                if let Err(err) = wifi_scan_sender.send(request) {
+                                    warn!("Failed to enqueue WifiScan request: {err}");
+                                }
+                            }
+                            Err(err) => warn!("RX WifiScan decode failed: {err:#}"),
+                        }
                     } else if packet.cmd == master::protocol::MessageType::InterfaceSettings.as_u8() {
                         match master::messages::interface_settings::decode(&packet) {
                             Ok(msg) => {
                                 info!("RX InterfaceSettings: {:?}", msg);
                                 match msg.settings {
                                     master::messages::interface_settings::InterfaceSettings::WiFiStation(
-                                        station_cfg,
+                                        station_settings,
                                     ) => {
                                         if let Err(err) =
-                                            wifi_station_interface_settings_sender.send(station_cfg)
+                                            wifi_station_interface_settings_sender.send(station_settings)
                                         {
                                             warn!("Failed to enqueue WiFiStation interface event: {err}");
                                         } else {
@@ -227,10 +240,10 @@ fn main() -> Result<()> {
                                         }
                                     }
                                     master::messages::interface_settings::InterfaceSettings::Ethernet(
-                                        ethernet_cfg,
+                                        ethernet_settings,
                                     ) => {
                                         if let Err(err) =
-                                            ethernet_interface_settings_sender.send(ethernet_cfg)
+                                            ethernet_interface_settings_sender.send(ethernet_settings)
                                         {
                                             warn!("Failed to enqueue Ethernet interface event: {err}");
                                         } else {

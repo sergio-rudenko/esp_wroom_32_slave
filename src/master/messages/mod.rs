@@ -5,3 +5,4 @@ pub mod service_settings;
 pub mod service_state;
 pub mod tcp_data;
 pub mod tcp_command;
+pub mod wifi_scan;

@@ -62,8 +62,8 @@ fn run(
 ) {
     info!("TCP server task started; waiting for ServiceSettings (TcpServer)...");
 
-    let mut cfg = match tcp_settings_receiver.recv() {
-        Ok(cfg) => cfg,
+    let mut settings = match tcp_settings_receiver.recv() {
+        Ok(settings) => settings,
         Err(_) => {
             info!("TCP server task stopped: settings channel closed before first config");
             return;
@@ -77,12 +77,12 @@ fn run(
     loop {
         if listener.is_none() {
             wait_for_lwip_driver_init(&lwip_socket_gate, lwip_socket_gate_expected);
-            match open_listener(cfg.port) {
+            match open_listener(settings.port) {
                 Ok(l) => listener = Some(l),
                 Err(err) => {
                     error!("TCP server bind failed: {err:#}; waiting for new settings");
-                    cfg = match tcp_settings_receiver.recv() {
-                        Ok(next) => next,
+                    settings = match tcp_settings_receiver.recv() {
+                        Ok(next_settings) => next_settings,
                         Err(_) => {
                             info!("TCP server task stopped: settings channel closed");
                             return;
@@ -93,10 +93,10 @@ fn run(
             }
         }
 
-        while let Ok(next_cfg) = tcp_settings_receiver.try_recv() {
+        while let Ok(next_settings) = tcp_settings_receiver.try_recv() {
             info!(
                 "TCP server apply settings: port={}, clientTimeout={}s",
-                next_cfg.port, next_cfg.client_timeout
+                next_settings.port, next_settings.client_timeout
             );
             disconnect_all_clients(
                 &mut clients,
@@ -104,14 +104,14 @@ fn run(
                 TcpDisconnectReason::ServerClosedConnection,
             );
             listener = None;
-            cfg = next_cfg;
+            settings = next_settings;
         }
 
         drain_tcp_commands(
             &tcp_command_receiver,
             &mut clients,
             &uart_tx_queue_sender,
-            cfg.client_timeout,
+            settings.client_timeout,
         );
         drain_tcp_data(&tcp_data_receiver, &mut clients, &uart_tx_queue_sender);
 
@@ -121,7 +121,7 @@ fn run(
                 &mut clients,
                 &uart_tx_queue_sender,
                 &mut rx_buf,
-                cfg.client_timeout,
+                settings.client_timeout,
             );
         }
 

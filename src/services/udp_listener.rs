@@ -54,9 +54,9 @@ fn run(
 ) {
     info!("UDP listener task started; waiting for ServiceSettings (UdpListener)…");
 
-    let mut active: UdpListenerSettings = loop {
+    let mut settings: UdpListenerSettings = loop {
         match udp_settings_receiver.recv() {
-            Ok(s) => break s,
+            Ok(settings) => break settings,
             Err(_) => {
                 info!("UDP listener task: settings channel closed before first config");
                 return;
@@ -71,7 +71,7 @@ fn run(
     loop {
         if sockets.is_empty() {
             wait_for_lwip_driver_init(&lwip_socket_gate, lwip_socket_gate_expected);
-            match open_sockets(&active) {
+            match open_sockets(&settings) {
                 Ok(s) => {
                     sockets = s;
                     set_nonblocking(&sockets);
@@ -79,7 +79,7 @@ fn run(
                 Err(e) => {
                     error!("UDP listener: bind failed: {e:#}; waiting for new settings");
                     match udp_settings_receiver.recv() {
-                        Ok(next) => active = next,
+                        Ok(next_settings) => settings = next_settings,
                         Err(_) => {
                             info!("UDP listener task: settings channel closed");
                             return;
@@ -90,11 +90,11 @@ fn run(
             }
         }
 
-        while let Ok(next) = udp_settings_receiver.try_recv() {
+        while let Ok(next_settings) = udp_settings_receiver.try_recv() {
             info!("UDP listener: applying new settings");
             drop(sockets);
             sockets = Vec::new();
-            active = next;
+            settings = next_settings;
         }
 
         if sockets.is_empty() {
@@ -109,7 +109,7 @@ fn run(
                         continue;
                     }
                     if let Err(e) =
-                        handle_datagram(&active, &buf[..n], src, sock, &mut response_rr)
+                        handle_datagram(&settings, &buf[..n], src, sock, &mut response_rr)
                     {
                         warn!("UDP listener: handle datagram: {e:#}");
                     }

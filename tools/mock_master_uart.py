@@ -39,6 +39,7 @@ class MessageType:
     SERVICE_STATE = 5
     TCP_COMMAND = 6
     TCP_DATA = 7
+    WIFI_SCAN = 8
 
 
 class InterfaceType:
@@ -64,6 +65,7 @@ MSG_NAMES = {
     5: "ServiceState",
     6: "TcpCommand",
     7: "TcpData",
+    8: "WifiScan",
 }
 
 IFACE_NAMES = {
@@ -236,6 +238,19 @@ def send_service_settings(ser: serial.Serial, service: int, settings: dict[str, 
     )
 
 
+def send_wifi_scan(ser: serial.Serial, limit: int) -> None:
+    payload_obj = {"limit": limit}
+    payload = msgpack.packb(payload_obj, use_bin_type=True)
+    frame = encode_packet(MessageType.WIFI_SCAN, 0, payload)
+    ser.write(frame)
+    ser.flush()
+    logging.info(
+        "TX WifiScan param=0 bytes=%d payload=%s",
+        len(frame),
+        json.dumps(payload_obj, ensure_ascii=False),
+    )
+
+
 def decode_payload(payload: bytes) -> Any:
     if not payload:
         return None
@@ -256,6 +271,24 @@ def log_rx_packet(pkt: Packet, raw_frame: bytes) -> None:
         boot_reason = pkt.parameter
         boot_name = {0: "Undefined", 1: "Power", 2: "Reset", 3: "Watchdog"}.get(boot_reason, str(boot_reason))
         logging.info("  READY boot_reason=%s(%s)", boot_reason, boot_name)
+        return
+
+    if pkt.cmd == MessageType.WIFI_SCAN:
+        chunk_index = pkt.parameter
+        if pkt.payload:
+            try:
+                obj = decode_payload(pkt.payload)
+                if isinstance(obj, list):
+                    logging.info("  WifiScan chunk=%d items=%d", chunk_index, len(obj))
+                else:
+                    logging.info("  WifiScan chunk=%d payload_type=%s", chunk_index, type(obj).__name__)
+                logging.info("  payload=%s", json.dumps(obj, ensure_ascii=False))
+            except Exception as exc:
+                logging.warning("  WifiScan MsgPack decode failed: %s", exc)
+                logging.debug("  raw payload hex: %s", pkt.payload.hex())
+        else:
+            logging.info("  WifiScan chunk=%d empty payload", chunk_index)
+        logging.debug("  frame hex: %s", raw_frame.hex())
         return
 
     if pkt.payload:
@@ -344,6 +377,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override NtpClient settings JSON object",
     )
+    parser.add_argument(
+        "--send-wifi-scan",
+        action="store_true",
+        help="Send one WifiScan request 5 seconds after startup",
+    )
+    parser.add_argument(
+        "--wifi-scan-limit",
+        type=int,
+        default=0,
+        help="WifiScan request limit (0 = all), used with --send-wifi-scan",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logs")
     return parser.parse_args()
 
@@ -363,6 +407,9 @@ def main() -> None:
     ntp_client_settings = (
         args.ntp_client_json if args.ntp_client_json is not None else default_ntp_client_settings()
     )
+    if args.wifi_scan_limit < 0:
+        logging.error("--wifi-scan-limit must be >= 0")
+        raise SystemExit(2)
 
     try:
         ser = serial.Serial(args.port, args.baud, timeout=0.05)
@@ -387,7 +434,13 @@ def main() -> None:
             send_service_settings(ser, ServiceType.NTP_CLIENT, ntp_client_settings)
 
         rx_buf = bytearray()
+        scan_send_deadline = time.monotonic() + 5.0 if args.send_wifi_scan else None
+        wifi_scan_sent = False
         while True:
+            if scan_send_deadline is not None and not wifi_scan_sent and time.monotonic() >= scan_send_deadline:
+                send_wifi_scan(ser, args.wifi_scan_limit)
+                wifi_scan_sent = True
+
             chunk = ser.read(256)
             if chunk:
                 rx_buf.extend(chunk)

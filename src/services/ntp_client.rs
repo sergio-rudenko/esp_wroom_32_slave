@@ -56,8 +56,8 @@ fn run(
 ) {
     info!("NTP client task started; waiting for ServiceSettings (NtpClient)...");
 
-    let mut cfg = match ntp_settings_receiver.recv() {
-        Ok(cfg) => cfg,
+    let mut settings = match ntp_settings_receiver.recv() {
+        Ok(settings) => settings,
         Err(_) => {
             info!("NTP client task stopped: settings channel closed before first config");
             return;
@@ -68,11 +68,11 @@ fn run(
     let mut no_link_reported = false;
 
     loop {
-        if !cfg.enabled {
+        if !settings.enabled {
             info!("NTP client disabled");
             no_link_reported = false;
-            cfg = match ntp_settings_receiver.recv() {
-                Ok(next) => next,
+            settings = match ntp_settings_receiver.recv() {
+                Ok(next_settings) => next_settings,
                 Err(_) => {
                     info!("NTP client task stopped: settings channel closed");
                     return;
@@ -86,7 +86,7 @@ fn run(
                 no_link_reported = true;
             }
             match ntp_settings_receiver.recv_timeout(Duration::from_secs(RETRY_PERIOD_SECS)) {
-                Ok(next) => cfg = next,
+                Ok(next_settings) => settings = next_settings,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     info!("NTP client task stopped: settings channel closed");
@@ -98,8 +98,8 @@ fn run(
         no_link_reported = false;
 
         let mut synced = false;
-        for server in &cfg.servers {
-            match sync_once(server, cfg.timezone) {
+        for server in &settings.servers {
+            match sync_once(server, settings.timezone) {
                 Ok((stratum, timet)) => {
                     info!("NTP sync success: server={server}, stratum={stratum}, timet={timet}");
                     send_service_state(
@@ -122,7 +122,7 @@ fn run(
         }
 
         let wait_secs = if synced {
-            (cfg.resync_period as u64).saturating_mul(60)
+            (settings.resync_period as u64).saturating_mul(60)
         } else {
             RETRY_PERIOD_SECS
         };
@@ -130,8 +130,8 @@ fn run(
 
         loop {
             match ntp_settings_receiver.recv_timeout(Duration::from_millis(500)) {
-                Ok(next) => {
-                    cfg = next;
+                Ok(next_settings) => {
+                    settings = next_settings;
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
