@@ -38,7 +38,7 @@ class MessageType:
     SERVICE_SETTINGS = 4
     SERVICE_STATE = 5
     TCP_COMMAND = 6
-    TCP_EVENT = 7
+    TCP_DATA = 7
 
 
 class InterfaceType:
@@ -63,7 +63,7 @@ MSG_NAMES = {
     4: "ServiceSettings",
     5: "ServiceState",
     6: "TcpCommand",
-    7: "TcpEvent",
+    7: "TcpData",
 }
 
 IFACE_NAMES = {
@@ -194,6 +194,13 @@ def default_udp_listener_settings() -> dict[str, Any]:
     }
 
 
+def default_tcp_server_settings() -> dict[str, Any]:
+    return {
+        "port": 8000,
+        "clientTimeout": 0,
+    }
+
+
 def send_interface_settings(ser: serial.Serial, interface: int, settings: dict[str, Any]) -> None:
     payload = msgpack.packb(settings, use_bin_type=True)
     frame = encode_packet(MessageType.INTERFACE_SETTINGS, interface, payload)
@@ -228,8 +235,13 @@ def decode_payload(payload: bytes) -> Any:
 
 def log_rx_packet(pkt: Packet, raw_frame: bytes) -> None:
     cmd_name = MSG_NAMES.get(pkt.cmd, f"Unknown({pkt.cmd})")
-    iface_name = IFACE_NAMES.get(pkt.parameter, str(pkt.parameter))
-    logging.info("RX %s param=%s payload_len=%d", cmd_name, iface_name, len(pkt.payload))
+    if pkt.cmd in (MessageType.TCP_COMMAND, MessageType.TCP_DATA):
+        param_name = str(pkt.parameter)
+    elif pkt.cmd in (MessageType.SERVICE_SETTINGS, MessageType.SERVICE_STATE):
+        param_name = SERVICE_NAMES.get(pkt.parameter, str(pkt.parameter))
+    else:
+        param_name = IFACE_NAMES.get(pkt.parameter, str(pkt.parameter))
+    logging.info("RX %s param=%s payload_len=%d", cmd_name, param_name, len(pkt.payload))
 
     if pkt.cmd == MessageType.READY:
         boot_reason = pkt.parameter
@@ -301,6 +313,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override UdpListener settings JSON object",
     )
+    parser.add_argument(
+        "--send-tcp-server",
+        action="store_true",
+        help="Send ServiceSettings/TcpServer after InterfaceSettings",
+    )
+    parser.add_argument(
+        "--tcp-server-json",
+        type=parse_json_settings,
+        default=None,
+        help="Override TcpServer settings JSON object",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logs")
     return parser.parse_args()
 
@@ -312,6 +335,9 @@ def main() -> None:
     wifi_settings = args.wifi_json if args.wifi_json is not None else default_wifi_station_settings()
     ethernet_settings = args.ethernet_json if args.ethernet_json is not None else default_ethernet_settings()
     udp_settings = args.udp_json if args.udp_json is not None else default_udp_listener_settings()
+    tcp_server_settings = (
+        args.tcp_server_json if args.tcp_server_json is not None else default_tcp_server_settings()
+    )
 
     try:
         ser = serial.Serial(args.port, args.baud, timeout=0.05)
@@ -330,6 +356,8 @@ def main() -> None:
             send_interface_settings(ser, InterfaceType.ETHERNET, ethernet_settings)
         if args.send_udp_listener:
             send_service_settings(ser, ServiceType.UDP_LISTENER, udp_settings)
+        if args.send_tcp_server:
+            send_service_settings(ser, ServiceType.TCP_SERVER, tcp_server_settings)
 
         rx_buf = bytearray()
         while True:

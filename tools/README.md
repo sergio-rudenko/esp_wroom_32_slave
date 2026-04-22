@@ -82,7 +82,9 @@ python tools/mock_master_uart.py COM2
 - `--ethernet-json '{...}'` — override Ethernet-конфига JSON-объектом;
 - `--startup-delay-ms 300` — задержка перед отправкой после открытия порта;
 - `--send-udp-listener` — дополнительно отправить `ServiceSettings` для `UdpListener`;
-- `--udp-json '{...}'` — override `UdpListener`-настроек JSON-объектом;
+- `--udp-listener-json '{...}'` — override `UdpListener`-настроек JSON-объектом;
+- `--send-tcp-server` — дополнительно отправить `ServiceSettings` для `TcpServer`;
+- `--tcp-server-json '{...}'` — override `TcpServer`-настроек JSON-объектом;
 - `-v` / `--verbose` — детальные логи.
 
 Пример с явными конфигами:
@@ -91,9 +93,11 @@ python tools/mock_master_uart.py COM2
 python3 tools/mock_master_uart.py /dev/ttyUSB0 \
   --send both \
   --send-udp-listener \
+  --send-tcp-server \
   --wifi-json '{"enabled":true,"ssid":"Test123","password":"12345678","reconnectPeriod":15,"dhcp":true}' \
   --ethernet-json '{"enabled":true,"dhcp":true}' \
-  --udp-json '{"requestPorts":[47701,23629],"responsePorts":[23569,21913],"requestType":"XXX","serviceId":"YYY","deviceType":0,"port":8000}' \
+  --udp-listener-json '{"requestPorts":[47701,23629],"responsePorts":[23569,21913],"requestType":"XXX","serviceId":"YYY","deviceType":0,"port":8000}' \
+  --tcp-server-json '{"port":8000,"clientTimeout":0}' \
   -v
 ```
 
