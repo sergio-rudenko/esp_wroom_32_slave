@@ -31,6 +31,7 @@ pub fn spawn_task(
     tcp_settings_receiver: mpsc::Receiver<TcpServerSettings>,
     tcp_command_receiver: mpsc::Receiver<TcpCommandMessage>,
     tcp_data_receiver: mpsc::Receiver<TcpDataMessage>,
+    tcp_network_reset_receiver: mpsc::Receiver<()>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
     lwip_socket_gate: Arc<AtomicU8>,
     lwip_socket_gate_expected: u8,
@@ -43,6 +44,7 @@ pub fn spawn_task(
                 tcp_settings_receiver,
                 tcp_command_receiver,
                 tcp_data_receiver,
+                tcp_network_reset_receiver,
                 uart_tx_queue_sender,
                 lwip_socket_gate,
                 lwip_socket_gate_expected,
@@ -56,6 +58,7 @@ fn run(
     tcp_settings_receiver: mpsc::Receiver<TcpServerSettings>,
     tcp_command_receiver: mpsc::Receiver<TcpCommandMessage>,
     tcp_data_receiver: mpsc::Receiver<TcpDataMessage>,
+    tcp_network_reset_receiver: mpsc::Receiver<()>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
     lwip_socket_gate: Arc<AtomicU8>,
     lwip_socket_gate_expected: u8,
@@ -106,6 +109,7 @@ fn run(
             listener = None;
             settings = next_settings;
         }
+        drain_network_reset_events(&tcp_network_reset_receiver, &mut clients, &uart_tx_queue_sender);
 
         drain_tcp_commands(
             &tcp_command_receiver,
@@ -289,6 +293,26 @@ fn drain_tcp_data(
         }
         conn.last_activity = Instant::now();
     }
+}
+
+fn drain_network_reset_events(
+    tcp_network_reset_receiver: &mpsc::Receiver<()>,
+    clients: &mut [Option<ClientConn>],
+    uart_tx_queue_sender: &mpsc::Sender<Vec<u8>>,
+) {
+    let mut got_event = false;
+    while tcp_network_reset_receiver.try_recv().is_ok() {
+        got_event = true;
+    }
+    if !got_event {
+        return;
+    }
+    info!("TCP server: network reset signal received, closing all clients");
+    disconnect_all_clients(
+        clients,
+        uart_tx_queue_sender,
+        TcpDisconnectReason::ServerClosedConnection,
+    );
 }
 
 fn disconnect_all_clients(

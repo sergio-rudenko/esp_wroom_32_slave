@@ -185,6 +185,17 @@ def default_ethernet_settings() -> dict[str, Any]:
     }
 
 
+def default_wifi_ap_settings() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "ssid": "ESP32-AP",
+        "password": "12345678",
+        "channel": 7,
+        "maxClients": 4,
+        "static": ["192.168.4.1", "255.255.255.0"],
+    }
+
+
 def default_udp_listener_settings() -> dict[str, Any]:
     return {
         "requestPorts": [47701, 23629],
@@ -257,6 +268,32 @@ def decode_payload(payload: bytes) -> Any:
     return msgpack.unpackb(payload, raw=False)
 
 
+def _log_interface_state(payload_obj: Any, interface: int) -> None:
+    if not isinstance(payload_obj, dict):
+        return
+
+    iface_name = IFACE_NAMES.get(interface, str(interface))
+    if interface == InterfaceType.WIFI_AP:
+        if payload_obj.get("started") is True:
+            logging.info("  %s state: started=true", iface_name)
+        elif payload_obj.get("started") is False:
+            logging.info("  %s state: started=false error=%s", iface_name, payload_obj.get("error"))
+
+        if payload_obj.get("clientConnected") is True:
+            logging.info(
+                "  %s client connected: mac=%s ip=%s",
+                iface_name,
+                payload_obj.get("mac"),
+                payload_obj.get("ip"),
+            )
+        elif payload_obj.get("clientConnected") is False:
+            logging.info(
+                "  %s client disconnected: mac=%s",
+                iface_name,
+                payload_obj.get("mac"),
+            )
+
+
 def log_rx_packet(pkt: Packet, raw_frame: bytes) -> None:
     cmd_name = MSG_NAMES.get(pkt.cmd, f"Unknown({pkt.cmd})")
     if pkt.cmd in (MessageType.TCP_COMMAND, MessageType.TCP_DATA):
@@ -294,6 +331,8 @@ def log_rx_packet(pkt: Packet, raw_frame: bytes) -> None:
     if pkt.payload:
         try:
             obj = decode_payload(pkt.payload)
+            if pkt.cmd == MessageType.INTERFACE_STATE:
+                _log_interface_state(obj, pkt.parameter)
             logging.info("  payload=%s", json.dumps(obj, ensure_ascii=False))
         except Exception as exc:
             logging.warning("  MsgPack decode failed: %s", exc)
@@ -322,8 +361,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baud", type=int, default=115200, help="UART baudrate (default: 115200)")
     parser.add_argument(
         "--send",
-        choices=("wifi", "ethernet", "both", "none"),
-        default="both",
+        choices=("wifi", "ethernet", "ap", "all", "none"),
+        default="all",
         help="What InterfaceSettings to send at startup",
     )
     parser.add_argument(
@@ -337,6 +376,17 @@ def parse_args() -> argparse.Namespace:
         type=parse_json_settings,
         default=None,
         help="Override Ethernet settings JSON object",
+    )
+    parser.add_argument(
+        "--send-wifi-ap",
+        action="store_true",
+        help="Send InterfaceSettings/WiFiAccessPoint after startup",
+    )
+    parser.add_argument(
+        "--wifi-ap-json",
+        type=parse_json_settings,
+        default=None,
+        help="Override WiFiAccessPoint settings JSON object",
     )
     parser.add_argument(
         "--startup-delay-ms",
@@ -398,6 +448,7 @@ def main() -> None:
 
     wifi_settings = args.wifi_json if args.wifi_json is not None else default_wifi_station_settings()
     ethernet_settings = args.ethernet_json if args.ethernet_json is not None else default_ethernet_settings()
+    wifi_ap_settings = args.wifi_ap_json if args.wifi_ap_json is not None else default_wifi_ap_settings()
     udp_settings = (
         args.udp_listener_json if args.udp_listener_json is not None else default_udp_listener_settings()
     )
@@ -422,10 +473,12 @@ def main() -> None:
         time.sleep(args.startup_delay_ms / 1000.0)
 
     try:
-        if args.send in ("wifi", "both"):
+        if args.send in ("wifi", "all"):
             send_interface_settings(ser, InterfaceType.WIFI_STATION, wifi_settings)
-        if args.send in ("ethernet", "both"):
+        if args.send in ("ethernet", "all"):
             send_interface_settings(ser, InterfaceType.ETHERNET, ethernet_settings)
+        if args.send in ("ap", "all") or args.send_wifi_ap:
+            send_interface_settings(ser, InterfaceType.WIFI_AP, wifi_ap_settings)
         if args.send_udp_listener:
             send_service_settings(ser, ServiceType.UDP_LISTENER, udp_settings)
         if args.send_tcp_server:

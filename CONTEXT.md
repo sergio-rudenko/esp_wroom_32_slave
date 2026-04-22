@@ -43,6 +43,11 @@ Implemented:
   - `ServiceType::TcpServer` (`port`, `clientTimeout`)
   - `ServiceType::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
 - Wi-Fi STA task (`wifi_station.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
+- Wi-Fi AP (`WiFiAccessPoint`) runtime is implemented inside `wifi_station.rs` using one shared Wi-Fi driver:
+  - accepts AP settings (`enabled`, `ssid`, `password`, `channel`, `maxClients`, `static[ip,mask]`)
+  - applies AP-only or AP+STA (`Configuration::AccessPoint` / `Configuration::Mixed`) depending on station state
+  - emits AP state messages via `InterfaceState` (`started=true`, `started=false+error`, `clientConnected=true/false`)
+  - reports AP client `mac` and assigned DHCP `ip` on connect events
 - Wi-Fi STA and Ethernet now apply `dhcp`/`static` from `InterfaceSettings`:
   - `dhcp=true`: DHCP client mode
   - `dhcp=false`: static `ip/netmask/gateway/dns/secondary_dns` is parsed and applied to netif
@@ -57,7 +62,7 @@ Implemented:
   - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
   - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
 - **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
-- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings`/`WifiScan` TX + ESP frame decode; param logging for `TcpData`/`TcpCommand` as slot index; `--send-wifi-scan --wifi-scan-limit` sends one scan request after 5 seconds)
+- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings`/`WifiScan` TX + ESP frame decode; includes `--send-wifi-ap --wifi-ap-json`; `--send-wifi-scan --wifi-scan-limit` sends one scan request after 5 seconds)
 - Tooling documentation rule: when scripts in `tools/` are changed, update `tools/README.md` in the same task/commit so CLI options and examples stay in sync.
 - **TCP server** (`services/tcp_server.rs`) implemented:
   - listens on `0.0.0.0:port` from `ServiceSettings(TcpServer)`
@@ -74,10 +79,6 @@ Implemented:
   - `TcpData` is forwarded over UART `115200`; TX queue is unbounded
   - sustained large bursts (100KB+) can accumulate backlog in RAM and increase latency/instability risk
   - practical safe burst target without flow control: ~`32..64KB`
-
-Not implemented yet:
-
-- Wi-Fi AP runtime task
 
 ## Build/toolchain notes
 
@@ -144,6 +145,24 @@ Errors solved during recovery:
 
 ## Next engineering steps
 
-1. Wi-Fi AP task and mixed STA+AP policy.
-2. Add explicit status/error signaling for `WifiScan` execution failures/timeouts.
-3. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
+1. Add explicit status/error signaling for `WifiScan` execution failures/timeouts.
+2. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
+3. Bring `README.md` to a "contract" format (field tables, value ranges, required/optional markers) so STM32 side can use it as a protocol specification directly.
+
+## Documentation sync notes
+
+This file keeps engineering context and historical rationale. Public onboarding and protocol docs live in `README.md`.
+
+Key items migrated from old root `README.md` and preserved here:
+
+- Stability rationale for stack choice (`ESP-IDF` + `esp-idf-*` crates over bare-metal route for Wi-Fi/Ethernet-heavy firmware).
+- Runtime split by responsibility:
+  - `master` (UART transport + frame protocol + message codecs)
+  - `network` (Wi-Fi/Ethernet drivers and interface state)
+  - `services` (UDP listener, TCP server, NTP client)
+- Release artifact flow:
+  - firmware image is produced with `tools/build_firmware.sh`
+  - script builds release ELF, creates app image, merges bootloader + partition table + app into root `firmware.bin`
+- Partition sizing constraint and fix:
+  - app image exceeded 1MB factory slot in default table
+  - project now uses custom `partitions.csv` (larger factory partition) during firmware generation flow

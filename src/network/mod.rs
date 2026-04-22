@@ -1,2 +1,2 @@
-pub mod wifi_station;
+pub mod wifi;
 pub mod ethernet;

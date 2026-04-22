@@ -35,6 +35,32 @@ pub struct DisconnectedPayload {
     pub disconnect_reason: i32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ApStartedPayload {
+    pub started: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApStartErrorPayload {
+    pub started: bool,
+    pub error: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApClientConnectedPayload {
+    #[serde(rename = "clientConnected")]
+    pub client_connected: bool,
+    pub mac: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApClientDisconnectedPayload {
+    #[serde(rename = "clientConnected")]
+    pub client_connected: bool,
+    pub mac: String,
+}
+
 fn encode_payload<T: Serialize>(interface: InterfaceType, payload: &T) -> Result<Vec<u8>> {
     let payload = rmp_serde::to_vec_named(payload)?;
     encode_packet(
@@ -78,6 +104,41 @@ pub fn encode_disconnected(interface: InterfaceType, disconnect_reason: i32) -> 
         &DisconnectedPayload {
             connected: false,
             disconnect_reason,
+        },
+    )
+}
+
+pub fn encode_ap_started(interface: InterfaceType) -> Result<Vec<u8>> {
+    encode_payload(interface, &ApStartedPayload { started: true })
+}
+
+pub fn encode_ap_start_error(interface: InterfaceType, error: i32) -> Result<Vec<u8>> {
+    encode_payload(
+        interface,
+        &ApStartErrorPayload {
+            started: false,
+            error,
+        },
+    )
+}
+
+pub fn encode_ap_client_connected(interface: InterfaceType, mac: String, ip: String) -> Result<Vec<u8>> {
+    encode_payload(
+        interface,
+        &ApClientConnectedPayload {
+            client_connected: true,
+            mac,
+            ip,
+        },
+    )
+}
+
+pub fn encode_ap_client_disconnected(interface: InterfaceType, mac: String) -> Result<Vec<u8>> {
+    encode_payload(
+        interface,
+        &ApClientDisconnectedPayload {
+            client_connected: false,
+            mac,
         },
     )
 }

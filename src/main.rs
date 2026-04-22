@@ -39,6 +39,8 @@ fn main() -> Result<()> {
     let (uart_rx_queue_sender, uart_rx_queue_receiver) = mpsc::channel::<Vec<u8>>();
     let (wifi_station_interface_settings_sender, wifi_station_interface_settings_receiver) =
         mpsc::channel::<master::messages::interface_settings::WiFiStationSettings>();
+    let (wifi_ap_interface_settings_sender, wifi_ap_interface_settings_receiver) =
+        mpsc::channel::<master::messages::interface_settings::WiFiAccessPointSettings>();
     let (ethernet_interface_settings_sender, ethernet_interface_settings_receiver) =
         mpsc::channel::<master::messages::interface_settings::EthernetSettings>();
     let (udp_listener_settings_sender, udp_listener_settings_receiver) =
@@ -51,6 +53,7 @@ fn main() -> Result<()> {
         mpsc::channel::<master::messages::tcp_command::TcpCommandMessage>();
     let (tcp_server_data_sender, tcp_server_data_receiver) =
         mpsc::channel::<master::messages::tcp_data::TcpDataMessage>();
+    let (tcp_server_network_reset_sender, tcp_server_network_reset_receiver) = mpsc::channel::<()>();
     let (wifi_scan_sender, wifi_scan_receiver) =
         mpsc::channel::<master::messages::wifi_scan::WifiScanRequestMessage>();
     let lwip_socket_gate = Arc::new(AtomicU8::new(0));
@@ -90,12 +93,14 @@ fn main() -> Result<()> {
     uart_tx_queue_sender.send(master::encode_ready()?)?;
     info!("UART1 ready for STM32 controller");
 
-    network::wifi_station::spawn_task(
+    network::wifi::spawn_task(
         modem,
         sysloop.clone(),
         nvs,
         wifi_station_interface_settings_receiver,
+        wifi_ap_interface_settings_receiver,
         wifi_scan_receiver,
+        tcp_server_network_reset_sender,
         uart_tx_queue_sender.clone(),
         lwip_socket_gate.clone(),
         connected_links.clone(),
@@ -129,6 +134,7 @@ fn main() -> Result<()> {
         tcp_server_settings_receiver,
         tcp_server_command_receiver,
         tcp_server_data_receiver,
+        tcp_server_network_reset_receiver,
         uart_tx_queue_sender.clone(),
         lwip_socket_gate.clone(),
         LWIP_STACK_DRIVER_TASKS,
@@ -250,7 +256,17 @@ fn main() -> Result<()> {
                                             info!("Enqueued Ethernet interface event");
                                         }
                                     }
-                                    master::messages::interface_settings::InterfaceSettings::WiFiAccessPoint(_) => {}
+                                    master::messages::interface_settings::InterfaceSettings::WiFiAccessPoint(
+                                        ap_settings,
+                                    ) => {
+                                        if let Err(err) =
+                                            wifi_ap_interface_settings_sender.send(ap_settings)
+                                        {
+                                            warn!("Failed to enqueue WiFiAccessPoint interface event: {err}");
+                                        } else {
+                                            info!("Enqueued WiFiAccessPoint interface event");
+                                        }
+                                    }
                                 }
                             }
                             Err(err) => warn!("RX InterfaceSettings decode failed: {err:#}"),
