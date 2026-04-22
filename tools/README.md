@@ -52,7 +52,8 @@ python3 tools/check_udp_listener.py 192.168.1.255 -v
   - payload: MsgPack;
 - принимает и декодирует кадры от ESP32:
   - `READY` (в т.ч. `boot_reason`);
-  - `InterfaceState` и другие сообщения с попыткой MsgPack-декодирования.
+  - `InterfaceState` и другие сообщения с попыткой MsgPack-декодирования;
+  - `WifiScan` ответы (чанки, где `PARAM` = номер чанка).
 
 ### Зависимости
 
@@ -87,6 +88,8 @@ python tools/mock_master_uart.py COM2
 - `--tcp-server-json '{...}'` — override `TcpServer`-настроек JSON-объектом;
 - `--send-ntp-client` — дополнительно отправить `ServiceSettings` для `NtpClient`;
 - `--ntp-client-json '{...}'` — override `NtpClient`-настроек JSON-объектом;
+- `--send-wifi-scan` — однократно отправить запрос `WifiScan` через 5 секунд после старта;
+- `--wifi-scan-limit N` — `limit` в запросе `WifiScan` (`0` = вернуть все AP, по умолчанию `0`);
 - `-v` / `--verbose` — детальные логи.
 
 Пример с явными конфигами:
@@ -97,6 +100,8 @@ python3 tools/mock_master_uart.py /dev/ttyUSB0 \
   --send-udp-listener \
   --send-tcp-server \
   --send-ntp-client \
+  --send-wifi-scan \
+  --wifi-scan-limit 20 \
   --wifi-json '{"enabled":true,"ssid":"Test123","password":"12345678","reconnectPeriod":15,"dhcp":true}' \
   --ethernet-json '{"enabled":true,"dhcp":true}' \
   --udp-listener-json '{"requestPorts":[47701,23629],"responsePorts":[23569,21913],"requestType":"XXX","serviceId":"YYY","deviceType":0,"port":8000}' \

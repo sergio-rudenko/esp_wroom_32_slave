@@ -58,6 +58,7 @@ Implemented:
   - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
 - **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
 - **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings`/`WifiScan` TX + ESP frame decode; param logging for `TcpData`/`TcpCommand` as slot index; `--send-wifi-scan --wifi-scan-limit` sends one scan request after 5 seconds)
+- Tooling documentation rule: when scripts in `tools/` are changed, update `tools/README.md` in the same task/commit so CLI options and examples stay in sync.
 - **TCP server** (`services/tcp_server.rs`) implemented:
   - listens on `0.0.0.0:port` from `ServiceSettings(TcpServer)`
   - max 4 simultaneous clients (`index` 0..3)
