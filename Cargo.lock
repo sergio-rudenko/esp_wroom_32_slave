@@ -598,7 +598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "esp32-uart-slave-controller2"
+name = "esp_wroom_32_slave"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -610,6 +610,7 @@ dependencies = [
  "log",
  "rmp-serde",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [package]
-name = "esp32-uart-slave-controller2"
+name = "esp_wroom_32_slave"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"
@@ -19,6 +19,7 @@ anyhow = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
+serde_json = "1"
 embedded-svc = "0.28"
 esp-idf-sys = { version = "0.36", features = ["binstart"] }
 esp-idf-hal = "0.45"

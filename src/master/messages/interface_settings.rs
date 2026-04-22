@@ -165,9 +165,9 @@ fn validate_wifi_ap(s: &WiFiAccessPointSettings) -> Result<()> {
     if !(1..=10).contains(&s.max_clients) {
         anyhow::bail!("WiFiAccessPoint maxClients out of range: {}", s.max_clients);
     }
-    if s.static_config.len() != 1 {
+    if s.static_config.len() != 2 {
         anyhow::bail!(
-            "WiFiAccessPoint static must have 1 string (AP IP), got {}",
+            "WiFiAccessPoint static must have 2 strings (AP IP, netmask), got {}",
             s.static_config.len()
         );
     }

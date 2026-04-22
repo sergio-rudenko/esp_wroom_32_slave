@@ -20,7 +20,8 @@ pub enum MessageType {
     ServiceSettings = 4,
     ServiceState = 5,
     TcpCommand = 6,
-    TcpEvent = 7,
+    TcpData = 7,
+    WifiScan = 8,
 }
 
 impl TryFrom<u8> for MessageType {
@@ -35,7 +36,8 @@ impl TryFrom<u8> for MessageType {
             4 => Ok(Self::ServiceSettings),
             5 => Ok(Self::ServiceState),
             6 => Ok(Self::TcpCommand),
-            7 => Ok(Self::TcpEvent),
+            7 => Ok(Self::TcpData),
+            8 => Ok(Self::WifiScan),
             _ => anyhow::bail!("unknown MessageType: {}", value),
         }
     }

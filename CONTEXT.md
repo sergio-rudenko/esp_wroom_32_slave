@@ -8,8 +8,9 @@ Embedded Rust firmware for `ESP32-WROOM-32UE` with:
 
 - UART0 logs
 - UART1 link to host controller (`STM32`)
-- Wi-Fi (`STA` + `AP`)
+- Wi-Fi (`STA` + future `AP`)
 - Ethernet (`LAN8720A-CP`)
+- Services (UDP discovery listener, TCP server, and NTP client)
 - Maximum stability over novelty
 
 ## Chosen stack
@@ -29,39 +30,62 @@ Implemented:
 
 - Bootstrapped Rust project for ESP32 target
 - UART0 logs via `EspLogger`
-- UART1 init for STM32 (`GPIO17` TX, `GPIO16` RX, `115200`)
-- UART1 split into async/non-blocking runtime tasks:
-  - TX task: sends framed packets from TX queue/channel
-  - RX task: reads UART bytes, extracts valid frames, pushes to RX queue/channel
-- Packet framing protocol implemented:
+- UART1 init for STM32 (`GPIO14` TX, `GPIO4` RX, `115200`)
+- UART1 split into async/non-blocking runtime tasks (TX/RX threads + channels)
+- Packet framing protocol:
   - `SOF(0xAA) + LEN(u16 LE payload size) + CMD + PARAM + PAYLOAD + CRC16-CCITT`
-- READY message implemented and enabled:
-  - sent once at startup
-  - then every 5s until first valid frame from master is received
-  - boot reason resolved locally in READY message module from real ESP reset reason
-- Message modules introduced under `src/master/messages`:
-  - `ready` (ESP32 -> STM32, encode only)
-  - `interface_settings` (STM32 -> ESP32, decode only)
-  - `interface_state` (ESP32 -> STM32, encode only)
-- `InterfaceSettings` decode from MsgPack payload implemented with validation and RX routing
-- Wi-Fi STA runtime task implemented (`src/network/wifi_station.rs`):
-  - dedicated async task consumes `WiFiStation` interface settings from channel
-  - applies config and connects/reconnects with `reconnectPeriod`
-  - monitors link state (`is_connected`/`is_up`)
-  - emits `InterfaceState` events to STM32:
-    - `connected` (with STA MAC)
-    - `connect_error` (prefers Wi-Fi disconnect reason, fallback to ESP error code)
-    - `got_ip` (IP/mask/gateway)
-    - `rssi` (periodic, every 20s while connected)
-    - `disconnected` (with human-readable reason logging + reason code in payload)
-- Ethernet init function placeholder (`init_ethernet_lan8720`)
-- `sdkconfig.defaults` baseline for LAN8720 RMII
-
-Not implemented yet:
-
-- WiFi AP runtime task
-- Ethernet driver bring-up with full pin mapping and event handling
-- Applying decoded `InterfaceSettings` for `WiFiAccessPoint` and `Ethernet` into live runtime tasks
+- READY message (encode only): periodic until first master frame; real ESP reset reason
+- Message modules under `src/master/messages`:
+  - `ready`, `interface_settings`, `interface_state`, **`service_settings`**, **`service_state`**, **`tcp_command`**, **`tcp_data`**, **`wifi_scan`**
+- `InterfaceSettings` decode (MsgPack), validation, RX routing to Wi-Fi STA and Ethernet tasks
+- **`ServiceSettings`** decode for:
+  - `ServiceType::UdpListener` (`requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`)
+  - `ServiceType::TcpServer` (`port`, `clientTimeout`)
+  - `ServiceType::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
+- Wi-Fi runtime task (`network/wifi/mod.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
+- Wi-Fi AP (`WiFiAccessPoint`) runtime is implemented inside `network/wifi/mod.rs` using one shared Wi-Fi driver:
+  - accepts AP settings (`enabled`, `ssid`, `password`, `channel`, `maxClients`, `static[ip,mask]`)
+  - applies AP-only or AP+STA (`Configuration::AccessPoint` / `Configuration::Mixed`) depending on station state
+  - emits AP state messages via `InterfaceState` (`started=true`, `started=false+error`, `clientConnected=true/false`)
+  - reports AP client `mac` and assigned DHCP `ip` on connect events
+- Wi-Fi STA and Ethernet now apply `dhcp`/`static` from `InterfaceSettings`:
+  - `dhcp=true`: DHCP client mode
+  - `dhcp=false`: static `ip/netmask/gateway/dns/secondary_dns` is parsed and applied to netif
+- Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
+- `WifiScan` message flow implemented:
+  - inbound (`STM32 -> ESP32`): MsgPack `{ "limit": N }`, `PARAM=0`
+  - handled by `network/wifi` task, which performs Wi-Fi scan
+  - outbound (`ESP32 -> STM32`): MsgPack array of AP objects `{ssid,bssid,channel,rssi,authMethod}`
+  - responses are chunked by `MAX_PAYLOAD_SIZE`, `PARAM` carries chunk index (`0..`)
+  - empty result is sent as MsgPack-encoded empty array `[]` in chunk `PARAM=0`
+- **UDP listener** (`services/udp_listener.rs`):
+  - waits for gate count **2** (both driver tasks finished lwIP-related init) before `std::net::UdpSocket::bind`, avoiding `tcpip_send_msg_wait_sem` / Invalid mbox races; does **not** require link or IP on any interface
+  - binds `0.0.0.0` on each request port; JSON request/response as per spec; round-robin response ports
+- **`tools/check_udp_listener.py`**: host test tool (broadcast IP CLI arg, 1 Hz probe, logs)
+- **`tools/mock_master_uart.py`**: host-side STM32 emulator via UART (`InterfaceSettings`/`ServiceSettings`/`WifiScan` TX + ESP frame decode; includes `--send-wifi-ap --wifi-ap-json`; `--send-wifi-scan --wifi-scan-limit` sends one scan request after 5 seconds)
+- Tooling documentation rule: when scripts in `tools/` are changed, update `tools/README.md` in the same task/commit so CLI options and examples stay in sync.
+- **TCP server** (`services/tcp_server.rs`) implemented:
+  - listens on `0.0.0.0:port` from `ServiceSettings(TcpServer)`
+  - max 4 simultaneous clients (`index` 0..3)
+  - emits `ServiceState` on connect/disconnect (`ClientClosedConnection`, `ServerClosedConnection`, `InactivityTimeout`, `NotConnected`)
+  - bridges client bytes to master as `TcpData`; accepts inbound `TcpData` from master and writes to socket
+  - supports `TcpCommand { close: true }` from master
+- **NTP client** (`services/ntp_client.rs`) implemented:
+  - settings: `enabled`, `timezone` (minutes), `resyncPeriod` (minutes, default 15), up to 3 servers by priority
+  - emits `ServiceState` success payload `{stratum, timet, server}` and error payload `{error, server}`
+  - resync uses configured `resyncPeriod`
+  - guarded by real link state: sync is skipped while active Wi-Fi/Ethernet link count is zero (prevents repeated error spam)
+- **Task WDT** integrated (`system/wdt.rs`):
+  - TWDT timeout configured to `10s`
+  - if TWDT is already initialized by runtime, firmware reconfigures it via `esp_task_wdt_reconfigure`
+  - subscribed tasks: `main-loop`, `uart-tx-task`, `uart-rx-task`, `wifi-task`, `eth-task`, `udp-listener`, `tcp-server`, `ntp-client`
+  - feeds are placed in all long-running loops and wait loops (`recv_timeout`, lwIP init waits, reconnect waits)
+  - early task exits now explicitly unsubscribe from TWDT to avoid false watchdog triggers on dead pthread handles
+- `READY` boot reason now maps full ESP32 reset reasons (power/external/software/panic/watchdog variants/deepsleep/brownout/sdio/usb/jtag/efuse/power glitch/cpu lockup)
+- Large stream note:
+  - `TcpData` is forwarded over UART `115200`; TX queue is unbounded
+  - sustained large bursts (100KB+) can accumulate backlog in RAM and increase latency/instability risk
+  - practical safe burst target without flow control: ~`32..64KB`
 
 ## Build/toolchain notes
 
@@ -101,8 +125,7 @@ Dependency set confirmed to compile in this workspace:
 - `esp-idf-sys = "0.36"`
 - `esp-idf-hal = "0.45"`
 - `esp-idf-svc = "0.51"` with features `["alloc", "critical-section", "experimental"]`
-- `serde = "1"` with `derive`
-- `rmp-serde = "1"`
+- `serde = "1"` with `derive`, `rmp-serde = "1"`, **`serde_json = "1"`**
 - `embuild = { version = "0.33", features = ["espidf"] }` (build-dependency)
 
 Important project config:
@@ -114,9 +137,9 @@ Important project config:
 Confirmed local build command sequence:
 
 1. `source $HOME/export-esp.sh`
-2. `export IDF_PATH=/mnt/projects/esp32-uart-slave-conroller2/.embuild/espressif/esp-idf/v5.2.3`
-3. `export IDF_TOOLS_PATH=/mnt/projects/esp32-uart-slave-conroller2/.embuild/espressif`
-4. `cargo build`
+2. `export IDF_PATH=/mnt/projects/esp_wroom_32_slave/.embuild/espressif/esp-idf/v5.2.3`
+3. `export IDF_TOOLS_PATH=/mnt/projects/esp_wroom_32_slave/.embuild/espressif`
+4. `cargo build --target xtensa-esp32-espidf`
 
 Errors solved during recovery:
 
@@ -125,10 +148,28 @@ Errors solved during recovery:
 - `cannot find espidf in embuild` -> enable `embuild` feature `espidf`
 - `xtensa-esp32-elf-gcc ... --ldproxy-linker` unknown option -> install/use `ldproxy` as linker
 - `undefined reference to __pender` -> remove `embassy-time-driver` feature from `esp-idf-svc`
+- **`Invalid mbox` / `tcpip_send_msg_wait_sem`** when opening UDP during Wi-Fi init -> **`lwip_socket_gate`**: STA and ETH tasks increment after their lwIP init; UDP listener waits for expected count before `UdpSocket::bind`
 
 ## Next engineering steps
 
-1. Apply `InterfaceSettings` messages to runtime network config changes (`WiFiStation`, `WiFiAccessPoint`, `Ethernet`).
-2. Implement production-ready Wi-Fi mixed mode (`STA+AP`) by adding AP task and integrating with STA task.
-3. Implement LAN8720 bring-up with exact board pinout (RMII clock, PHY addr, power/reset GPIO).
-4. Add timeout/retry/watchdog policy around master communication and network state transitions.
+1. Add explicit status/error signaling for `WifiScan` execution failures/timeouts.
+2. Optional: extend watchdog diagnostics with task-local heartbeat counters and periodic health snapshots in logs.
+3. Completed: `README.md` converted to contract-style protocol reference (field tables, ranges, required/optional markers for interfaces/services/boot reasons/frame fields).
+
+## Documentation sync notes
+
+This file keeps engineering context and historical rationale. Public onboarding and protocol docs live in `README.md`.
+
+Key items migrated from old root `README.md` and preserved here:
+
+- Stability rationale for stack choice (`ESP-IDF` + `esp-idf-*` crates over bare-metal route for Wi-Fi/Ethernet-heavy firmware).
+- Runtime split by responsibility:
+  - `master` (UART transport + frame protocol + message codecs)
+  - `network` (Wi-Fi/Ethernet drivers and interface state)
+  - `services` (UDP listener, TCP server, NTP client)
+- Release artifact flow:
+  - firmware image is produced with `tools/build_firmware.sh`
+  - script builds release ELF, creates app image, merges bootloader + partition table + app into root `firmware.bin`
+- Partition sizing constraint and fix:
+  - app image exceeded 1MB factory slot in default table
+  - project now uses custom `partitions.csv` (larger factory partition) during firmware generation flow

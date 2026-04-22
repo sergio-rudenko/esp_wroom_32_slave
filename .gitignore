@@ -9,3 +9,7 @@ Thumbs.db
 
 # Rust
 *.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
