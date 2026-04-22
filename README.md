@@ -17,8 +17,8 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 
 - UART0 logs via `EspLogger`
 - UART1 configured for host controller (STM32) on:
-  - TX: `GPIO17`
-  - RX: `GPIO16`
+  - TX: `GPIO14`
+  - RX: `GPIO4`
   - baud: `115200`
 - UART1 runtime architecture:
   - dedicated TX task reads outgoing frames from TX queue/channel
@@ -56,6 +56,13 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
   - sends `ServiceState` on connect/disconnect (`ClientClosedConnection`, `ServerClosedConnection`, `InactivityTimeout`, `NotConnected`)
   - forwards client socket bytes to master as `TcpData` and writes inbound `TcpData` from master back to socket
   - handles `TcpCommand { close: true }` from master per slot
+- NTP client (`src/services/ntp_client.rs`):
+  - consumes `ServiceSettings::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
+  - attempts sync using servers by priority and emits `ServiceState`:
+    - success: `{stratum, timet, server}`
+    - error: `{error, server}`
+  - resync period is configurable via `resyncPeriod` (minutes, default 15)
+  - sync attempts are blocked while there are no real active Wi-Fi/Ethernet links (no spam on master)
 - Throughput note for large TCP streams:
   - UART is `115200` and outbound queue is unbounded; very large bursts (100KB+) can build backlog in RAM
   - practical "safe burst" target is about `32..64KB` per transfer unless application-level flow control is added
@@ -92,6 +99,7 @@ For max stability with Wi-Fi + Ethernet + UART in one firmware:
 - `src/network/ethernet.rs` — Ethernet task
 - `src/services/udp_listener.rs` — UDP discovery listener task
 - `src/services/tcp_server.rs` — TCP server task (slots/timeout/TcpData bridge)
+- `src/services/ntp_client.rs` — NTP client task (priority servers/resync/service state)
 
 ## Next steps
 

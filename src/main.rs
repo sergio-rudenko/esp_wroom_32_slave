@@ -45,11 +45,14 @@ fn main() -> Result<()> {
         mpsc::channel::<master::messages::service_settings::UdpListenerSettings>();
     let (tcp_server_settings_sender, tcp_server_settings_receiver) =
         mpsc::channel::<master::messages::service_settings::TcpServerSettings>();
+    let (ntp_client_settings_sender, ntp_client_settings_receiver) =
+        mpsc::channel::<master::messages::service_settings::NtpClientSettings>();
     let (tcp_server_command_sender, tcp_server_command_receiver) =
         mpsc::channel::<master::messages::tcp_command::TcpCommandMessage>();
     let (tcp_server_data_sender, tcp_server_data_receiver) =
         mpsc::channel::<master::messages::tcp_data::TcpDataMessage>();
     let lwip_socket_gate = Arc::new(AtomicU8::new(0));
+    let connected_links = Arc::new(AtomicU8::new(0));
 
     thread::Builder::new()
         .name("uart-tx-task".into())
@@ -92,6 +95,7 @@ fn main() -> Result<()> {
         wifi_station_interface_settings_receiver,
         uart_tx_queue_sender.clone(),
         lwip_socket_gate.clone(),
+        connected_links.clone(),
     )?;
 
     network::ethernet::spawn_task(
@@ -109,6 +113,7 @@ fn main() -> Result<()> {
         ethernet_interface_settings_receiver,
         uart_tx_queue_sender.clone(),
         lwip_socket_gate.clone(),
+        connected_links.clone(),
     )?;
 
     services::udp_listener::spawn_task(
@@ -122,9 +127,18 @@ fn main() -> Result<()> {
         tcp_server_command_receiver,
         tcp_server_data_receiver,
         uart_tx_queue_sender.clone(),
-        lwip_socket_gate,
+        lwip_socket_gate.clone(),
         LWIP_STACK_DRIVER_TASKS,
     )?;
+
+    services::ntp_client::spawn_task(
+        ntp_client_settings_receiver,
+        uart_tx_queue_sender.clone(),
+        lwip_socket_gate.clone(),
+        LWIP_STACK_DRIVER_TASKS,
+        connected_links.clone(),
+    )?;
+    let _ = ntp_client_settings_sender.send(services::ntp_client::mock_settings());
 
     let mut has_master_message = false;
     let mut ready_tick: u32 = 0;
@@ -162,6 +176,15 @@ fn main() -> Result<()> {
                                             warn!("Failed to enqueue TcpServer settings: {err}");
                                         } else {
                                             info!("Enqueued TcpServer service settings");
+                                        }
+                                    }
+                                    master::messages::service_settings::ServiceSettings::NtpClient(
+                                        cfg,
+                                    ) => {
+                                        if let Err(err) = ntp_client_settings_sender.send(cfg) {
+                                            warn!("Failed to enqueue NtpClient settings: {err}");
+                                        } else {
+                                            info!("Enqueued NtpClient service settings");
                                         }
                                     }
                                 }

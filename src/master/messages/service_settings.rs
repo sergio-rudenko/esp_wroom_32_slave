@@ -58,10 +58,25 @@ pub struct TcpServerSettings {
     pub client_timeout: u16,
 }
 
+/// MsgPack/JSON payload for `ServiceType::NtpClient` (from host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NtpClientSettings {
+    pub enabled: bool,
+    pub timezone: i32,
+    #[serde(default = "default_ntp_resync_period", rename = "resyncPeriod")]
+    pub resync_period: u16,
+    pub servers: Vec<String>,
+}
+
+fn default_ntp_resync_period() -> u16 {
+    15
+}
+
 #[derive(Debug, Clone)]
 pub enum ServiceSettings {
     UdpListener(UdpListenerSettings),
     TcpServer(TcpServerSettings),
+    NtpClient(NtpClientSettings),
 }
 
 #[derive(Debug, Clone)]
@@ -93,10 +108,15 @@ pub fn decode(packet: &Packet<'_>) -> Result<ServiceSettingsMessage> {
                 settings: ServiceSettings::TcpServer(s),
             })
         }
-        ServiceType::Undefined => anyhow::bail!("ServiceSettings service type is Undefined"),
         ServiceType::NtpClient => {
-            anyhow::bail!("ServiceSettings for {:?} is not implemented", service);
+            let s: NtpClientSettings = rmp_serde::from_slice(packet.payload)?;
+            validate_ntp_client(&s)?;
+            Ok(ServiceSettingsMessage {
+                service,
+                settings: ServiceSettings::NtpClient(s),
+            })
         }
+        ServiceType::Undefined => anyhow::bail!("ServiceSettings service type is Undefined"),
     }
 }
 
@@ -129,6 +149,27 @@ fn validate_tcp_server(s: &TcpServerSettings) -> Result<()> {
     }
     if s.client_timeout > 600 {
         anyhow::bail!("TCP server clientTimeout out of range: {}", s.client_timeout);
+    }
+    Ok(())
+}
+
+fn validate_ntp_client(s: &NtpClientSettings) -> Result<()> {
+    if !(-720..=840).contains(&s.timezone) {
+        anyhow::bail!("NTP client timezone out of range: {}", s.timezone);
+    }
+    if s.servers.len() > 3 {
+        anyhow::bail!("NTP client servers must have at most 3 items, got {}", s.servers.len());
+    }
+    if s.enabled && s.servers.is_empty() {
+        anyhow::bail!("NTP client servers required when enabled=true");
+    }
+    if !(1..=1440).contains(&s.resync_period) {
+        anyhow::bail!("NTP client resyncPeriod out of range: {}", s.resync_period);
+    }
+    for server in &s.servers {
+        if server.trim().is_empty() {
+            anyhow::bail!("NTP client server entry must be non-empty");
+        }
     }
     Ok(())
 }

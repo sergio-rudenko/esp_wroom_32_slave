@@ -24,6 +24,7 @@ pub fn spawn_task(
     // Incremented once after Wi-Fi / lwIP init (success or fatal error) so UDP can avoid racing
     // `EspWifi::new` with `std::net::UdpSocket::bind`.
     lwip_socket_gate: Arc<AtomicU8>,
+    connected_links: Arc<AtomicU8>,
 ) -> Result<()> {
     const WIFI_STATION_TASK_STACK_BYTES: usize = 32 * 1024;
     const LINK_MONITOR_POLL_MS: u32 = 1000;
@@ -77,6 +78,8 @@ pub fn spawn_task(
             }
         };
 
+        let mut link_registered = false;
+
         loop {
             info!(
                 "WiFiStation settings: enabled={}, ssid='{}', dhcp={}, reconnectPeriod={}s",
@@ -84,6 +87,10 @@ pub fn spawn_task(
             );
 
             if !cfg.enabled {
+                if link_registered {
+                    connected_links.fetch_sub(1, Ordering::SeqCst);
+                    link_registered = false;
+                }
                 if let Err(err) = wifi.stop() {
                     warn!("WiFiStation stop failed: {err:#}");
                 } else {
@@ -192,6 +199,10 @@ pub fn spawn_task(
                         match wifi.wait_netif_up() {
                             Ok(()) => {
                                 info!("WiFiStation netif is up");
+                                if !link_registered {
+                                    connected_links.fetch_add(1, Ordering::SeqCst);
+                                    link_registered = true;
+                                }
                                 match wifi.wifi().sta_netif().get_ip_info() {
                                     Ok(ip) => {
                                         let netmask = core::net::Ipv4Addr::from(ip.subnet.mask);
@@ -222,13 +233,26 @@ pub fn spawn_task(
                                     LINK_MONITOR_POLL_MS,
                                 ) {
                                     Ok(Some(next_cfg)) => {
+                                        if link_registered {
+                                            connected_links.fetch_sub(1, Ordering::SeqCst);
+                                            link_registered = false;
+                                        }
                                         cfg = next_cfg;
                                         continue;
                                     }
                                     Ok(None) => {
+                                        if link_registered {
+                                            connected_links.fetch_sub(1, Ordering::SeqCst);
+                                            link_registered = false;
+                                        }
                                         // disconnected, retry current cfg after reconnect period
                                     }
-                                    Err(()) => return,
+                                    Err(()) => {
+                                        if link_registered {
+                                            connected_links.fetch_sub(1, Ordering::SeqCst);
+                                        }
+                                        return;
+                                    }
                                 }
                             }
                             Err(err) => {
@@ -270,6 +294,9 @@ pub fn spawn_task(
                     // Keep current config and retry connect.
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if link_registered {
+                        connected_links.fetch_sub(1, Ordering::SeqCst);
+                    }
                     info!("WiFiStation task stopped: event channel closed");
                     return;
                 }

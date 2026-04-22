@@ -32,6 +32,7 @@ pub fn spawn_task(
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
     // Incremented once after Ethernet / lwIP init (success or fatal error).
     lwip_socket_gate: Arc<AtomicU8>,
+    connected_links: Arc<AtomicU8>,
 ) -> Result<()> {
     const ETHERNET_TASK_STACK_BYTES: usize = 24 * 1024;
     const LINK_MONITOR_POLL_MS: u32 = 1000;
@@ -81,10 +82,16 @@ pub fn spawn_task(
                 }
             };
 
+            let mut link_registered = false;
+
             loop {
                 info!("Ethernet settings: enabled={}, dhcp={}", cfg.enabled, cfg.dhcp);
 
                 if !cfg.enabled {
+                    if link_registered {
+                        connected_links.fetch_sub(1, Ordering::SeqCst);
+                        link_registered = false;
+                    }
                     if let Err(err) = eth.stop() {
                         warn!("Ethernet stop failed: {err:#}");
                     } else {
@@ -135,6 +142,10 @@ pub fn spawn_task(
                             match eth.wait_netif_up() {
                                 Ok(()) => {
                                     info!("Ethernet netif is up");
+                                    if !link_registered {
+                                        connected_links.fetch_add(1, Ordering::SeqCst);
+                                        link_registered = true;
+                                    }
                                     match eth.eth().netif().get_ip_info() {
                                         Ok(ip) => {
                                             let netmask =
@@ -163,13 +174,26 @@ pub fn spawn_task(
                                         LINK_MONITOR_POLL_MS,
                                     ) {
                                         Ok(Some(next_cfg)) => {
+                                            if link_registered {
+                                                connected_links.fetch_sub(1, Ordering::SeqCst);
+                                                link_registered = false;
+                                            }
                                             cfg = next_cfg;
                                             continue;
                                         }
                                         Ok(None) => {
+                                            if link_registered {
+                                                connected_links.fetch_sub(1, Ordering::SeqCst);
+                                                link_registered = false;
+                                            }
                                             // disconnected, keep current config and retry quickly
                                         }
-                                        Err(()) => return,
+                                        Err(()) => {
+                                            if link_registered {
+                                                connected_links.fetch_sub(1, Ordering::SeqCst);
+                                            }
+                                            return;
+                                        }
                                     }
                                 }
                                 Err(err) => {
@@ -208,6 +232,9 @@ pub fn spawn_task(
                         // keep current config and retry
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        if link_registered {
+                            connected_links.fetch_sub(1, Ordering::SeqCst);
+                        }
                         info!("Ethernet task stopped: event channel closed");
                         return;
                     }

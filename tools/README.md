@@ -85,6 +85,8 @@ python tools/mock_master_uart.py COM2
 - `--udp-listener-json '{...}'` — override `UdpListener`-настроек JSON-объектом;
 - `--send-tcp-server` — дополнительно отправить `ServiceSettings` для `TcpServer`;
 - `--tcp-server-json '{...}'` — override `TcpServer`-настроек JSON-объектом;
+- `--send-ntp-client` — дополнительно отправить `ServiceSettings` для `NtpClient`;
+- `--ntp-client-json '{...}'` — override `NtpClient`-настроек JSON-объектом;
 - `-v` / `--verbose` — детальные логи.
 
 Пример с явными конфигами:
@@ -94,10 +96,12 @@ python3 tools/mock_master_uart.py /dev/ttyUSB0 \
   --send both \
   --send-udp-listener \
   --send-tcp-server \
+  --send-ntp-client \
   --wifi-json '{"enabled":true,"ssid":"Test123","password":"12345678","reconnectPeriod":15,"dhcp":true}' \
   --ethernet-json '{"enabled":true,"dhcp":true}' \
   --udp-listener-json '{"requestPorts":[47701,23629],"responsePorts":[23569,21913],"requestType":"XXX","serviceId":"YYY","deviceType":0,"port":8000}' \
   --tcp-server-json '{"port":8000,"clientTimeout":0}' \
+  --ntp-client-json '{"enabled":true,"timezone":180,"resyncPeriod":15,"servers":["0.pool.ntp.org","1.pool.ntp.org","2.pool.ntp.org"]}' \
   -v
 ```
 

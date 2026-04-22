@@ -37,6 +37,19 @@ struct TcpDisconnectedPayload {
     reason: u8,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct NtpSyncedPayload {
+    stratum: u8,
+    timet: i64,
+    server: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NtpErrorPayload {
+    error: i32,
+    server: String,
+}
+
 pub fn encode_tcp_connected(index: u8, remote_ip: String, remote_port: u16) -> Result<Vec<u8>> {
     let payload = TcpConnectedPayload {
         connected: true,
@@ -62,6 +75,30 @@ pub fn encode_tcp_disconnected(index: u8, reason: TcpDisconnectReason) -> Result
     encode_packet(
         MessageType::ServiceState.as_u8(),
         ServiceType::TcpServer.as_u8(),
+        &payload,
+    )
+}
+
+pub fn encode_ntp_synced(stratum: u8, timet: i64, server: String) -> Result<Vec<u8>> {
+    let payload = NtpSyncedPayload {
+        stratum,
+        timet,
+        server,
+    };
+    let payload = rmp_serde::to_vec_named(&payload)?;
+    encode_packet(
+        MessageType::ServiceState.as_u8(),
+        ServiceType::NtpClient.as_u8(),
+        &payload,
+    )
+}
+
+pub fn encode_ntp_error(error: i32, server: String) -> Result<Vec<u8>> {
+    let payload = NtpErrorPayload { error, server };
+    let payload = rmp_serde::to_vec_named(&payload)?;
+    encode_packet(
+        MessageType::ServiceState.as_u8(),
+        ServiceType::NtpClient.as_u8(),
         &payload,
     )
 }

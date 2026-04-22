@@ -201,6 +201,15 @@ def default_tcp_server_settings() -> dict[str, Any]:
     }
 
 
+def default_ntp_client_settings() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "timezone": 180,
+        "resyncPeriod": 15,
+        "servers": ["0.pool.ntp.org", "1.pool.ntp.org", "2.pool.ntp.org"],
+    }
+
+
 def send_interface_settings(ser: serial.Serial, interface: int, settings: dict[str, Any]) -> None:
     payload = msgpack.packb(settings, use_bin_type=True)
     frame = encode_packet(MessageType.INTERFACE_SETTINGS, interface, payload)
@@ -308,7 +317,7 @@ def parse_args() -> argparse.Namespace:
         help="Send ServiceSettings/UdpListener after InterfaceSettings",
     )
     parser.add_argument(
-        "--udp-json",
+        "--udp-listener-json",
         type=parse_json_settings,
         default=None,
         help="Override UdpListener settings JSON object",
@@ -324,6 +333,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override TcpServer settings JSON object",
     )
+    parser.add_argument(
+        "--send-ntp-client",
+        action="store_true",
+        help="Send ServiceSettings/NtpClient after InterfaceSettings",
+    )
+    parser.add_argument(
+        "--ntp-client-json",
+        type=parse_json_settings,
+        default=None,
+        help="Override NtpClient settings JSON object",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logs")
     return parser.parse_args()
 
@@ -334,9 +354,14 @@ def main() -> None:
 
     wifi_settings = args.wifi_json if args.wifi_json is not None else default_wifi_station_settings()
     ethernet_settings = args.ethernet_json if args.ethernet_json is not None else default_ethernet_settings()
-    udp_settings = args.udp_json if args.udp_json is not None else default_udp_listener_settings()
+    udp_settings = (
+        args.udp_listener_json if args.udp_listener_json is not None else default_udp_listener_settings()
+    )
     tcp_server_settings = (
         args.tcp_server_json if args.tcp_server_json is not None else default_tcp_server_settings()
+    )
+    ntp_client_settings = (
+        args.ntp_client_json if args.ntp_client_json is not None else default_ntp_client_settings()
     )
 
     try:
@@ -358,6 +383,8 @@ def main() -> None:
             send_service_settings(ser, ServiceType.UDP_LISTENER, udp_settings)
         if args.send_tcp_server:
             send_service_settings(ser, ServiceType.TCP_SERVER, tcp_server_settings)
+        if args.send_ntp_client:
+            send_service_settings(ser, ServiceType.NTP_CLIENT, ntp_client_settings)
 
         rx_buf = bytearray()
         while True:

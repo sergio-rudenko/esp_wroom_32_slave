@@ -10,7 +10,7 @@ Embedded Rust firmware for `ESP32-WROOM-32UE` with:
 - UART1 link to host controller (`STM32`)
 - Wi-Fi (`STA` + future `AP`)
 - Ethernet (`LAN8720A-CP`)
-- Services (UDP discovery listener and TCP server done; **NTP Client** next)
+- Services (UDP discovery listener, TCP server, and NTP client)
 - Maximum stability over novelty
 
 ## Chosen stack
@@ -30,7 +30,7 @@ Implemented:
 
 - Bootstrapped Rust project for ESP32 target
 - UART0 logs via `EspLogger`
-- UART1 init for STM32 (`GPIO17` TX, `GPIO16` RX, `115200`)
+- UART1 init for STM32 (`GPIO14` TX, `GPIO4` RX, `115200`)
 - UART1 split into async/non-blocking runtime tasks (TX/RX threads + channels)
 - Packet framing protocol:
   - `SOF(0xAA) + LEN(u16 LE payload size) + CMD + PARAM + PAYLOAD + CRC16-CCITT`
@@ -41,7 +41,7 @@ Implemented:
 - **`ServiceSettings`** decode for:
   - `ServiceType::UdpListener` (`requestPorts`, `responsePorts`, `requestType`, `serviceId`, `deviceType`, `port`)
   - `ServiceType::TcpServer` (`port`, `clientTimeout`)
-  - `ServiceType::NtpClient` still not implemented
+  - `ServiceType::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
 - Wi-Fi STA task (`wifi_station.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
 - Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
 - **UDP listener** (`services/udp_listener.rs`):
@@ -55,6 +55,11 @@ Implemented:
   - emits `ServiceState` on connect/disconnect (`ClientClosedConnection`, `ServerClosedConnection`, `InactivityTimeout`, `NotConnected`)
   - bridges client bytes to master as `TcpData`; accepts inbound `TcpData` from master and writes to socket
   - supports `TcpCommand { close: true }` from master
+- **NTP client** (`services/ntp_client.rs`) implemented:
+  - settings: `enabled`, `timezone` (minutes), `resyncPeriod` (minutes, default 15), up to 3 servers by priority
+  - emits `ServiceState` success payload `{stratum, timet, server}` and error payload `{error, server}`
+  - resync uses configured `resyncPeriod`
+  - guarded by real link state: sync is skipped while active Wi-Fi/Ethernet link count is zero (prevents repeated error spam)
 - Large stream note:
   - `TcpData` is forwarded over UART `115200`; TX queue is unbounded
   - sustained large bursts (100KB+) can accumulate backlog in RAM and increase latency/instability risk
@@ -62,7 +67,6 @@ Implemented:
 
 Not implemented yet:
 
-- **NTP Client** service (next git-flow feature): `ServiceSettings` for `ServiceType::NtpClient`
 - Wi-Fi AP runtime task
 - Applying static IP for STA/Ethernet when `dhcp=false` in `InterfaceSettings`
 
@@ -131,7 +135,6 @@ Errors solved during recovery:
 
 ## Next engineering steps
 
-1. **NTP Client** (`feature/NTP-Client`): decode/apply `ServiceSettings` for `NtpClient`, periodic sync and service state reporting.
-2. Apply static IP from `InterfaceSettings` when `dhcp=false` (Wi-Fi STA and Ethernet).
-3. Wi-Fi AP task and mixed STA+AP policy.
-4. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
+1. Apply static IP from `InterfaceSettings` when `dhcp=false` (Wi-Fi STA and Ethernet).
+2. Wi-Fi AP task and mixed STA+AP policy.
+3. Optional: timeout/retry/watchdog policy around master communication and network state transitions.
