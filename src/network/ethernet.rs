@@ -192,7 +192,7 @@ pub fn spawn_task(
                             };
                             send_interface_state(
                                 &uart_tx_queue_sender,
-                                interface_state::encode_connected(InterfaceType::Ethernet, mac),
+                                interface_state::encode_connected(InterfaceType::Ethernet),
                                 "ethernet_connected",
                             );
 
@@ -211,11 +211,20 @@ pub fn spawn_task(
                                                 ip.ip.to_string(),
                                                 netmask,
                                                 ip.subnet.gateway.to_string(),
+                                                get_dns_for_eth(
+                                                    &eth,
+                                                    esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
+                                                ),
+                                                get_dns_for_eth(
+                                                    &eth,
+                                                    esp_netif_dns_type_t_ESP_NETIF_DNS_BACKUP,
+                                                ),
                                             ];
                                             send_interface_state(
                                                 &uart_tx_queue_sender,
                                                 interface_state::encode_got_ip(
                                                     InterfaceType::Ethernet,
+                                                    mac.clone(),
                                                     ip_config,
                                                 ),
                                                 "ethernet_got_ip",
@@ -564,4 +573,18 @@ fn ipv4_to_esp(ip: Ipv4Addr) -> esp_ip4_addr_t {
     esp_ip4_addr_t {
         addr: u32::to_be(u32::from_be_bytes(ip.octets())),
     }
+}
+
+fn get_dns_for_eth(eth: &BlockingEth<EspEth<'_, RmiiEth>>, dns_type: u32) -> String {
+    let mut dns_info: esp_netif_dns_info_t = Default::default();
+    let netif_handle = eth.eth().netif().handle();
+    if EspError::convert(unsafe { esp_idf_sys::esp_netif_get_dns_info(netif_handle, dns_type, &mut dns_info) })
+        .is_ok()
+    {
+        let raw = unsafe { u32::from_be(dns_info.ip.u_addr.ip4.addr) };
+        if raw != 0 {
+            return Ipv4Addr::from(raw).to_string();
+        }
+    }
+    String::new()
 }

@@ -6,11 +6,15 @@ mod state;
 use anyhow::Result;
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration};
 use esp_idf_hal::modem::Modem;
+use esp_idf_svc::handle::RawHandle;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::netif::IpEvent;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi, WifiDeviceId, WifiEvent};
 use log::*;
+use esp_idf_sys::{
+    esp_netif_dns_info_t, esp_netif_dns_type_t_ESP_NETIF_DNS_BACKUP, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::mpsc;
@@ -391,10 +395,7 @@ pub fn spawn_task(
                                     let mac = format_mac(mac);
                                     send_interface_state(
                                         &uart_tx_queue_sender,
-                                        interface_state::encode_connected(
-                                            InterfaceType::WiFiStation,
-                                            mac.clone(),
-                                        ),
+                                        interface_state::encode_connected(InterfaceType::WiFiStation),
                                         "connected",
                                     );
                                     mac
@@ -424,11 +425,17 @@ pub fn spawn_task(
                                                 ip.ip.to_string(),
                                                 netmask.to_string(),
                                                 ip.subnet.gateway.to_string(),
+                                                get_dns_for_sta(&wifi, esp_netif_dns_type_t_ESP_NETIF_DNS_MAIN),
+                                                get_dns_for_sta(
+                                                    &wifi,
+                                                    esp_netif_dns_type_t_ESP_NETIF_DNS_BACKUP,
+                                                ),
                                             ];
                                             send_interface_state(
                                                 &uart_tx_queue_sender,
                                                 interface_state::encode_got_ip(
                                                     InterfaceType::WiFiStation,
+                                                    mac.clone(),
                                                     ip_config,
                                                 ),
                                                 "got_ip",
@@ -696,4 +703,20 @@ fn wait_for_netif_up_or_disconnect(
         }
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn get_dns_for_sta(wifi: &BlockingWifi<EspWifi<'_>>, dns_type: u32) -> String {
+    let mut dns_info: esp_netif_dns_info_t = Default::default();
+    let netif_handle = wifi.wifi().sta_netif().handle();
+    if esp_idf_hal::sys::EspError::convert(unsafe {
+        esp_idf_sys::esp_netif_get_dns_info(netif_handle, dns_type, &mut dns_info)
+    })
+    .is_ok()
+    {
+        let raw = unsafe { u32::from_be(dns_info.ip.u_addr.ip4.addr) };
+        if raw != 0 {
+            return std::net::Ipv4Addr::from(raw).to_string();
+        }
+    }
+    String::new()
 }

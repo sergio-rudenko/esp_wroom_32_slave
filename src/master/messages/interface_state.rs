@@ -7,20 +7,20 @@ use crate::master::protocol::{MessageType, encode_packet};
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectedPayload {
     pub connected: bool,
-    pub mac: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectErrorPayload {
     pub connected: bool,
-    #[serde(rename = "connectError")]
+    #[serde(rename = "error")]
     pub connect_error: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GotIpPayload {
-    #[serde(rename = "ipConfig")]
-    pub ip_config: [String; 3],
+    pub mac: String,
+    #[serde(rename = "ip")]
+    pub ip_config: [String; 5],
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ pub struct RssiPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct DisconnectedPayload {
     pub connected: bool,
-    #[serde(rename = "disconnectReason")]
+    #[serde(rename = "reason")]
     pub disconnect_reason: i32,
 }
 
@@ -70,14 +70,8 @@ fn encode_payload<T: Serialize>(interface: InterfaceType, payload: &T) -> Result
     )
 }
 
-pub fn encode_connected(interface: InterfaceType, mac: String) -> Result<Vec<u8>> {
-    encode_payload(
-        interface,
-        &ConnectedPayload {
-            connected: true,
-            mac,
-        },
-    )
+pub fn encode_connected(interface: InterfaceType) -> Result<Vec<u8>> {
+    encode_payload(interface, &ConnectedPayload { connected: true })
 }
 
 pub fn encode_connect_error(interface: InterfaceType, connect_error: i32) -> Result<Vec<u8>> {
@@ -90,8 +84,8 @@ pub fn encode_connect_error(interface: InterfaceType, connect_error: i32) -> Res
     )
 }
 
-pub fn encode_got_ip(interface: InterfaceType, ip_config: [String; 3]) -> Result<Vec<u8>> {
-    encode_payload(interface, &GotIpPayload { ip_config })
+pub fn encode_got_ip(interface: InterfaceType, mac: String, ip_config: [String; 5]) -> Result<Vec<u8>> {
+    encode_payload(interface, &GotIpPayload { mac, ip_config })
 }
 
 pub fn encode_rssi(interface: InterfaceType, rssi: i32) -> Result<Vec<u8>> {
