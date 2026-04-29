@@ -10,13 +10,6 @@ pub struct ConnectedPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ConnectErrorPayload {
-    pub connected: bool,
-    #[serde(rename = "error")]
-    pub connect_error: i32,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct GotIpPayload {
     pub mac: String,
     #[serde(rename = "ip")]
@@ -31,8 +24,7 @@ pub struct RssiPayload {
 #[derive(Debug, Clone, Serialize)]
 pub struct DisconnectedPayload {
     pub connected: bool,
-    #[serde(rename = "reason")]
-    pub disconnect_reason: i32,
+    pub error: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,16 +66,6 @@ pub fn encode_connected(interface: InterfaceType) -> Result<Vec<u8>> {
     encode_payload(interface, &ConnectedPayload { connected: true })
 }
 
-pub fn encode_connect_error(interface: InterfaceType, connect_error: i32) -> Result<Vec<u8>> {
-    encode_payload(
-        interface,
-        &ConnectErrorPayload {
-            connected: false,
-            connect_error,
-        },
-    )
-}
-
 pub fn encode_got_ip(interface: InterfaceType, mac: String, ip_config: [String; 5]) -> Result<Vec<u8>> {
     encode_payload(interface, &GotIpPayload { mac, ip_config })
 }
@@ -92,12 +74,12 @@ pub fn encode_rssi(interface: InterfaceType, rssi: i32) -> Result<Vec<u8>> {
     encode_payload(interface, &RssiPayload { rssi })
 }
 
-pub fn encode_disconnected(interface: InterfaceType, disconnect_reason: i32) -> Result<Vec<u8>> {
+pub fn encode_disconnected(interface: InterfaceType, error: i32) -> Result<Vec<u8>> {
     encode_payload(
         interface,
         &DisconnectedPayload {
             connected: false,
-            disconnect_reason,
+            error,
         },
     )
 }

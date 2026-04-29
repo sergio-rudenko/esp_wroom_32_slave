@@ -28,6 +28,25 @@ pub fn default_ap_settings() -> WiFiAccessPointSettings {
 pub fn build_ap_configuration(
     settings: &WiFiAccessPointSettings,
 ) -> Result<AccessPointConfiguration, EspError> {
+    if !settings.enabled {
+        let ssid = "ap-disabled"
+            .try_into()
+            .map_err(|_| EspError::from_infallible::<{ esp_idf_sys::ESP_ERR_INVALID_ARG }>())?;
+        let password = "disabled-ap-profile"
+            .try_into()
+            .map_err(|_| EspError::from_infallible::<{ esp_idf_sys::ESP_ERR_INVALID_ARG }>())?;
+        return Ok(AccessPointConfiguration {
+            ssid,
+            ssid_hidden: true,
+            channel: 1,
+            secondary_channel: None,
+            protocols: Default::default(),
+            auth_method: AuthMethod::WPA2Personal,
+            password,
+            max_connections: 1,
+        });
+    }
+
     let ssid = settings
         .ssid
         .as_str()

@@ -46,7 +46,7 @@ Implemented:
 - Wi-Fi invalid-credentials path hardened:
   - `wait_netif_up` replaced with bounded polling (`wait_for_netif_up_or_disconnect`, 15s timeout)
   - WDT feed is guaranteed during netif-up wait and during pre-retry idle waits
-  - `connect_error` + `disconnected` are emitted on early disconnect (e.g. `4WAY_HANDSHAKE_TIMEOUT`)
+  - on early disconnect (e.g. `4WAY_HANDSHAKE_TIMEOUT`) a single `disconnected` event is emitted with error code in payload
   - Wi-Fi disconnect reasons are centralized in typed enum `WifiDisconnectReason` (`network/wifi/state.rs`)
 - Wi-Fi STA/AP runtime updated to simultaneous operation:
   - driver is configured in `STA+AP` mode (`Configuration::Mixed`) and not restarted on every settings update
@@ -67,7 +67,7 @@ Implemented:
   - PHY address uses autodetect (`ESP_ETH_PHY_ADDR_AUTO`)
   - startup fallback profile is available in firmware via `master::config::ETHERNET_MOCK_DHCP_ON_BOOT` (`enabled=true`, `dhcp=true`) for link tests without master config (default is `false`)
   - blocking `wait_connected`/`wait_netif_up` paths were replaced with WDT-safe polling waits
-  - after cable unplug, task waits for link recovery without periodic `connect_error` spam, while still emitting `ethernet_disconnected` on link loss
+  - after cable unplug, task waits for link recovery and emits unified `ethernet_disconnected` (with `error` code) on link loss/failures
 - `WifiScan` message flow implemented:
   - inbound (`STM32 -> ESP32`): MsgPack `{ "limit": N }`, `PARAM=0`
   - handled by `network/wifi` task, which performs Wi-Fi scan
@@ -182,6 +182,34 @@ Errors solved during recovery:
 1. Add explicit status/error signaling for `WifiScan` execution failures/timeouts.
 2. Optional: extend watchdog diagnostics with task-local heartbeat counters and periodic health snapshots in logs.
 3. Completed: `README.md` converted to contract-style protocol reference (field tables, ranges, required/optional markers for interfaces/services/boot reasons/frame fields).
+
+## TODO
+
+1. Add new service `SnmpAgent` with support for SNMP `v2c` and `v3` in the same runtime model as current services (`ServiceSettings` -> dedicated task -> `ServiceState`).
+2. Extend UART protocol contracts:
+   - `ServiceType::SnmpAgent` in `service_settings`;
+   - `SnmpSettings` payload decode + validation (MsgPack);
+   - `ServiceState` events for SNMP lifecycle and errors.
+3. Add firmware task `services/snmp_agent.rs` and integrate it in boot flow:
+   - add `spawn_task` call in `main`;
+   - add settings channel sender/receiver;
+   - guard socket startup with existing lwIP gate pattern and feed WDT in all wait loops.
+4. Implement network behavior:
+   - listen on UDP `161` for agent requests;
+   - optional traps/informs to UDP `162`;
+   - avoid sync attempts when there are no active network links (same approach as `ntp_client`).
+5. Define and validate SNMP settings contract:
+   - global (`enabled`, `version`, `listenPort`, `engineId`, `sysName`, `sysLocation`, `sysContact`);
+   - v2c (`communities` + ACL);
+   - v3 (`users`, auth/priv algorithms, security level);
+   - trap targets (`host`, `port`, credentials/profile).
+6. Security hardening requirements:
+   - never log secrets in plaintext;
+   - keep credentials outside logs/debug dumps;
+   - emit `authFail`/security-related state events for observability.
+7. Tooling/tests:
+   - extend `tools/mock_master_uart.py` with SNMP `ServiceSettings` sender;
+   - add smoke tests for `snmpwalk` (`v2c` and `v3`) and negative tests for invalid credentials/profile mismatch.
 
 ## Documentation sync notes
 

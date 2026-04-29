@@ -160,8 +160,8 @@ pub fn spawn_task(
                     warn!("Ethernet IP settings apply failed: {err:#}");
                     send_interface_state(
                         &uart_tx_queue_sender,
-                        interface_state::encode_connect_error(InterfaceType::Ethernet, err.code()),
-                        "ethernet_connect_error",
+                        interface_state::encode_disconnected(InterfaceType::Ethernet, err.code()),
+                        "ethernet_disconnected",
                     );
                     settings = match recv_next_or_stop(&ethernet_interface_settings_receiver) {
                         Ok(next_settings) => next_settings,
@@ -266,11 +266,11 @@ pub fn spawn_task(
                                     warn!("Ethernet netif-up wait timed out");
                                     send_interface_state(
                                         &uart_tx_queue_sender,
-                                        interface_state::encode_connect_error(
+                                        interface_state::encode_disconnected(
                                             InterfaceType::Ethernet,
                                             esp_idf_sys::ESP_ERR_TIMEOUT,
                                         ),
-                                        "ethernet_connect_error",
+                                        "ethernet_disconnected",
                                     );
                                 }
                             }
@@ -391,8 +391,8 @@ fn ensure_ethernet_started(
                 warn!("Ethernet start failed: {err:#}");
                 send_interface_state(
                     uart_tx_queue_sender,
-                    interface_state::encode_connect_error(InterfaceType::Ethernet, err.code()),
-                    "ethernet_connect_error",
+                    interface_state::encode_disconnected(InterfaceType::Ethernet, err.code()),
+                    "ethernet_disconnected",
                 );
                 false
             }

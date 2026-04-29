@@ -261,8 +261,8 @@ pub fn spawn_task(
                         warn!("WiFiStation IP settings apply failed: {err:#}");
                         send_interface_state(
                             &uart_tx_queue_sender,
-                            interface_state::encode_connect_error(InterfaceType::WiFiStation, err.code()),
-                            "connect_error",
+                            interface_state::encode_disconnected(InterfaceType::WiFiStation, err.code()),
+                            "disconnected",
                         );
                         sta_settings = match recv_next_or_stop(&wifi_station_interface_settings_receiver) {
                             Ok(next_sta_settings) => next_sta_settings,
@@ -305,14 +305,14 @@ pub fn spawn_task(
                 if !started_ok {
                     send_interface_state(
                         &uart_tx_queue_sender,
-                        interface_state::encode_connect_error(
+                        interface_state::encode_disconnected(
                             InterfaceType::WiFiStation,
                             resolve_connect_error_code(
                                 start_err_code.unwrap_or(esp_idf_sys::ESP_ERR_INVALID_STATE),
                                 &disconnect_reason,
                             ),
                         ),
-                        "connect_error",
+                        "disconnected",
                     );
                     if ap_settings.enabled {
                         send_interface_state(
@@ -485,7 +485,7 @@ pub fn spawn_task(
                                     );
                                     send_interface_state(
                                         &uart_tx_queue_sender,
-                                        interface_state::encode_connect_error(
+                                        interface_state::encode_disconnected(
                                             InterfaceType::WiFiStation,
                                             if reason != 0 {
                                                 reason
@@ -493,7 +493,7 @@ pub fn spawn_task(
                                                 WifiDisconnectReason::Timeout as i32
                                             },
                                         ),
-                                        "connect_error",
+                                        "disconnected",
                                     );
                                     send_interface_state(
                                         &uart_tx_queue_sender,
@@ -505,11 +505,11 @@ pub fn spawn_task(
                                     warn!("WiFiStation netif-up wait timed out");
                                     send_interface_state(
                                         &uart_tx_queue_sender,
-                                        interface_state::encode_connect_error(
+                                        interface_state::encode_disconnected(
                                             InterfaceType::WiFiStation,
                                             WifiDisconnectReason::Timeout as i32,
                                         ),
-                                        "connect_error",
+                                        "disconnected",
                                     );
                                 }
                             }
@@ -518,11 +518,11 @@ pub fn spawn_task(
                             warn!("WiFiStation connect failed: {err:#}");
                             send_interface_state(
                                 &uart_tx_queue_sender,
-                                interface_state::encode_connect_error(
+                                interface_state::encode_disconnected(
                                     InterfaceType::WiFiStation,
                                     resolve_connect_error_code(err.code(), &disconnect_reason),
                                 ),
-                                "connect_error",
+                                "disconnected",
                             );
                         }
                     }

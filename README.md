@@ -245,18 +245,14 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 ```json
 { "mac": "94:B9:7E:C2:EC:C4", "ip": ["192.168.1.100", "255.255.255.0", "192.168.1.1", "8.8.8.8", "8.8.4.4"] }
 ```
-- connect_error:
-```json
-{ "error": 12345 }
-```
 - disconnected:
 ```json
-{ "connected": false, "reason": 8 }
+{ "connected": false, "error": 8 }
 ```
 
 Примечание по неверным credentials:
 
-- при ошибке аутентификации (например, `4WAY_HANDSHAKE_TIMEOUT`) прошивка отправляет `connect_error`, затем `disconnected`;
+- при ошибке аутентификации (например, `4WAY_HANDSHAKE_TIMEOUT`) прошивка отправляет `disconnected` с кодом ошибки;
 - ожидание поднятия netif ограничено по времени и не блокирует WDT.
 
 Режим работы STA/AP:
@@ -340,7 +336,7 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 
 - для LAN8720 используется RMII clock output с ESP32 на `GPIO16`;
 - питание PHY включается на `GPIO5` перед инициализацией;
-- при потере линка отправляется `ethernet_disconnected`, после чего прошивка ожидает восстановление линка без периодического спама `ethernet_connect_error`;
+- при потере линка/ошибке отправляется `ethernet_disconnected` с полем `error`, после чего прошивка ожидает восстановление линка;
 - для стендовой проверки без мастера можно включить встроенный fallback-профиль в прошивке: `ETHERNET_MOCK_DHCP_ON_BOOT=true` (по умолчанию `false`).
 
 Состояния отправляются через `InterfaceState` аналогично STA (подключение, IP, ошибки, disconnect).
