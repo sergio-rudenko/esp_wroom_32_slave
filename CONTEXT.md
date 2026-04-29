@@ -54,9 +54,10 @@ Implemented:
   - repeated unchanged `InterfaceState` notifications (`ap_disabled`, `disconnected`) are suppressed to avoid UART/log spam
 - Wi-Fi AP (`WiFiAccessPoint`) runtime is implemented inside `network/wifi/mod.rs` using one shared Wi-Fi driver:
   - accepts AP settings (`enabled`, `ssid`, `password`, `channel`, `maxClients`, `static[ip,mask]`)
-  - applies AP-only or AP+STA (`Configuration::AccessPoint` / `Configuration::Mixed`) depending on station state
+  - runtime remains in `STA+AP` mode to avoid restart churn; when `enabled=false` AP uses hidden disabled profile
   - emits AP state messages via `InterfaceState` (`started=true`, `started=false+error`, `clientConnected=true/false`)
   - reports AP client `mac` and assigned DHCP `ip` on connect events
+  - AP errors are normalized in typed enum `WifiApError` (`0`, `ESP_FAIL`, `ESP_ERR_NO_MEM`, `ESP_ERR_INVALID_ARG`, `ESP_ERR_INVALID_STATE`, `ESP_ERR_NOT_SUPPORTED`, `ESP_ERR_TIMEOUT`) and logged with text decode
 - Wi-Fi STA and Ethernet now apply `dhcp`/`static` from `InterfaceSettings`:
   - `dhcp=true`: DHCP client mode
   - `dhcp=false`: static `ip/netmask/gateway/dns/secondary_dns` is parsed and applied to netif
@@ -68,6 +69,7 @@ Implemented:
   - startup fallback profile is available in firmware via `master::config::ETHERNET_MOCK_DHCP_ON_BOOT` (`enabled=true`, `dhcp=true`) for link tests without master config (default is `false`)
   - blocking `wait_connected`/`wait_netif_up` paths were replaced with WDT-safe polling waits
   - after cable unplug, task waits for link recovery and emits unified `ethernet_disconnected` (with `error` code) on link loss/failures
+  - Ethernet errors are normalized via local enum (`0`, `ESP_FAIL`, `ESP_ERR_NO_MEM`, `ESP_ERR_INVALID_ARG`, `ESP_ERR_INVALID_STATE`, `ESP_ERR_NOT_SUPPORTED`, `ESP_ERR_TIMEOUT`) and logged with textual decode
 - `WifiScan` message flow implemented:
   - inbound (`STM32 -> ESP32`): MsgPack `{ "limit": N }`, `PARAM=0`
   - handled by `network/wifi` task, which performs Wi-Fi scan

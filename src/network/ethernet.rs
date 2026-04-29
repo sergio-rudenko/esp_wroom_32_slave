@@ -30,6 +30,51 @@ enum EthWaitOutcome {
     Timeout,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+enum EthernetError {
+    DisconnectedOrDisabled = 0,
+    Fail = esp_idf_sys::ESP_FAIL,
+    NoMem = esp_idf_sys::ESP_ERR_NO_MEM,
+    InvalidArg = esp_idf_sys::ESP_ERR_INVALID_ARG,
+    InvalidState = esp_idf_sys::ESP_ERR_INVALID_STATE,
+    NotSupported = esp_idf_sys::ESP_ERR_NOT_SUPPORTED,
+    Timeout = esp_idf_sys::ESP_ERR_TIMEOUT,
+}
+
+impl EthernetError {
+    fn from_code(code: i32) -> Option<Self> {
+        match code {
+            0 => Some(Self::DisconnectedOrDisabled),
+            esp_idf_sys::ESP_FAIL => Some(Self::Fail),
+            esp_idf_sys::ESP_ERR_NO_MEM => Some(Self::NoMem),
+            esp_idf_sys::ESP_ERR_INVALID_ARG => Some(Self::InvalidArg),
+            esp_idf_sys::ESP_ERR_INVALID_STATE => Some(Self::InvalidState),
+            esp_idf_sys::ESP_ERR_NOT_SUPPORTED => Some(Self::NotSupported),
+            esp_idf_sys::ESP_ERR_TIMEOUT => Some(Self::Timeout),
+            _ => None,
+        }
+    }
+
+    fn as_text(self) -> &'static str {
+        match self {
+            Self::DisconnectedOrDisabled => "DISCONNECTED_OR_DISABLED",
+            Self::Fail => "ESP_FAIL",
+            Self::NoMem => "ESP_ERR_NO_MEM",
+            Self::InvalidArg => "ESP_ERR_INVALID_ARG",
+            Self::InvalidState => "ESP_ERR_INVALID_STATE",
+            Self::NotSupported => "ESP_ERR_NOT_SUPPORTED",
+            Self::Timeout => "ESP_ERR_TIMEOUT",
+        }
+    }
+}
+
+fn ethernet_error_text(code: i32) -> &'static str {
+    EthernetError::from_code(code)
+        .map(EthernetError::as_text)
+        .unwrap_or("OTHER")
+}
+
 pub fn spawn_task(
     mac: MAC,
     rmii_txd0: Gpio19,
@@ -141,7 +186,7 @@ pub fn spawn_task(
                     if let Err(err) = eth.stop() {
                         warn!("Ethernet stop failed: {err:#}");
                     } else {
-                        info!("Ethernet disabled");
+                        info!("Ethernet disabled: error=0 ({})", ethernet_error_text(0));
                         send_interface_state(
                             &uart_tx_queue_sender,
                             interface_state::encode_disconnected(InterfaceType::Ethernet, 0),
@@ -157,7 +202,11 @@ pub fn spawn_task(
                 }
 
                 if let Err(err) = apply_eth_ip_settings(&mut eth, &settings) {
-                    warn!("Ethernet IP settings apply failed: {err:#}");
+                    warn!(
+                        "Ethernet IP settings apply failed: code={} ({}) err={err:#}",
+                        err.code(),
+                        ethernet_error_text(err.code())
+                    );
                     send_interface_state(
                         &uart_tx_queue_sender,
                         interface_state::encode_disconnected(InterfaceType::Ethernet, err.code()),
@@ -263,7 +312,11 @@ pub fn spawn_task(
                                     }
                                 }
                                 EthWaitOutcome::Timeout => {
-                                    warn!("Ethernet netif-up wait timed out");
+                                    warn!(
+                                        "Ethernet netif-up wait timed out: code={} ({})",
+                                        esp_idf_sys::ESP_ERR_TIMEOUT,
+                                        ethernet_error_text(esp_idf_sys::ESP_ERR_TIMEOUT)
+                                    );
                                     send_interface_state(
                                         &uart_tx_queue_sender,
                                         interface_state::encode_disconnected(
@@ -342,7 +395,10 @@ fn monitor_link_state(
         let connected = eth.is_connected().unwrap_or(false);
         let up = eth.is_up().unwrap_or(false);
         if !connected || !up {
-            info!("Ethernet disconnected (connected={connected}, up={up})");
+            info!(
+                "Ethernet disconnected (connected={connected}, up={up}), error=0 ({})",
+                ethernet_error_text(0)
+            );
             send_interface_state(
                 uart_tx_queue_sender,
                 interface_state::encode_disconnected(InterfaceType::Ethernet, 0),
@@ -388,7 +444,11 @@ fn ensure_ethernet_started(
                 info!("Ethernet start returned already started state");
                 true
             } else {
-                warn!("Ethernet start failed: {err:#}");
+                warn!(
+                    "Ethernet start failed: code={} ({}) err={err:#}",
+                    err.code(),
+                    ethernet_error_text(err.code())
+                );
                 send_interface_state(
                     uart_tx_queue_sender,
                     interface_state::encode_disconnected(InterfaceType::Ethernet, err.code()),

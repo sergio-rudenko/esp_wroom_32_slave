@@ -38,6 +38,45 @@ pub enum WifiDisconnectReason {
     NoApFoundRssiThreshold = 212,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WifiApError {
+    Disabled = 0,
+    Fail = esp_idf_sys::ESP_FAIL,
+    NoMem = esp_idf_sys::ESP_ERR_NO_MEM,
+    InvalidArg = esp_idf_sys::ESP_ERR_INVALID_ARG,
+    InvalidState = esp_idf_sys::ESP_ERR_INVALID_STATE,
+    NotSupported = esp_idf_sys::ESP_ERR_NOT_SUPPORTED,
+    Timeout = esp_idf_sys::ESP_ERR_TIMEOUT,
+}
+
+impl WifiApError {
+    pub fn from_code(code: i32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Disabled),
+            esp_idf_sys::ESP_FAIL => Some(Self::Fail),
+            esp_idf_sys::ESP_ERR_NO_MEM => Some(Self::NoMem),
+            esp_idf_sys::ESP_ERR_INVALID_ARG => Some(Self::InvalidArg),
+            esp_idf_sys::ESP_ERR_INVALID_STATE => Some(Self::InvalidState),
+            esp_idf_sys::ESP_ERR_NOT_SUPPORTED => Some(Self::NotSupported),
+            esp_idf_sys::ESP_ERR_TIMEOUT => Some(Self::Timeout),
+            _ => None,
+        }
+    }
+
+    pub fn as_text(self) -> &'static str {
+        match self {
+            Self::Disabled => "AP_DISABLED",
+            Self::Fail => "ESP_FAIL",
+            Self::NoMem => "ESP_ERR_NO_MEM",
+            Self::InvalidArg => "ESP_ERR_INVALID_ARG",
+            Self::InvalidState => "ESP_ERR_INVALID_STATE",
+            Self::NotSupported => "ESP_ERR_NOT_SUPPORTED",
+            Self::Timeout => "ESP_ERR_TIMEOUT",
+        }
+    }
+}
+
 impl WifiDisconnectReason {
     pub fn from_code(code: i32) -> Option<Self> {
         match code {
@@ -174,5 +213,11 @@ pub fn report_rssi_once(
 pub fn disconnect_reason_text(reason: i32) -> &'static str {
     WifiDisconnectReason::from_code(reason)
         .map(WifiDisconnectReason::as_text)
+        .unwrap_or("OTHER")
+}
+
+pub fn ap_error_text(error: i32) -> &'static str {
+    WifiApError::from_code(error)
+        .map(WifiApError::as_text)
         .unwrap_or("OTHER")
 }

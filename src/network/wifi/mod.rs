@@ -30,8 +30,8 @@ use self::config::{build_ap_configuration, compose_wifi_mode_configuration, defa
 use self::ip::{apply_ap_ip_settings, apply_sta_ip_settings};
 use self::scan::process_wifi_scan_requests;
 use self::state::{
-    disconnect_reason_text, format_mac, recv_next_or_stop, report_rssi_once, resolve_connect_error_code,
-    send_interface_state, WifiDisconnectReason,
+    ap_error_text, disconnect_reason_text, format_mac, recv_next_or_stop, report_rssi_once,
+    resolve_connect_error_code, send_interface_state, WifiDisconnectReason,
 };
 
 enum NetifWaitOutcome {
@@ -226,7 +226,11 @@ pub fn spawn_task(
                 let ap_cfg = match build_ap_configuration(&ap_settings) {
                     Ok(cfg) => cfg,
                     Err(err) => {
-                        warn!("WiFiAccessPoint config build failed: {err:#}");
+                        warn!(
+                            "WiFiAccessPoint config build failed: code={} ({}) err={err:#}",
+                            err.code(),
+                            ap_error_text(err.code())
+                        );
                         send_interface_state(
                             &uart_tx_queue_sender,
                             interface_state::encode_ap_start_error(
@@ -272,7 +276,11 @@ pub fn spawn_task(
                     }
                 }
                 if let Err(err) = apply_ap_ip_settings(&mut wifi, &ap_settings) {
-                    warn!("WiFiAccessPoint IP settings apply failed: {err:#}");
+                    warn!(
+                        "WiFiAccessPoint IP settings apply failed: code={} ({}) err={err:#}",
+                        err.code(),
+                        ap_error_text(err.code())
+                    );
                     send_interface_state(
                         &uart_tx_queue_sender,
                         interface_state::encode_ap_start_error(
@@ -315,11 +323,17 @@ pub fn spawn_task(
                         "disconnected",
                     );
                     if ap_settings.enabled {
+                        let ap_err = start_err_code.unwrap_or(esp_idf_sys::ESP_ERR_INVALID_STATE);
+                        warn!(
+                            "WiFiAccessPoint start failed: code={} ({})",
+                            ap_err,
+                            ap_error_text(ap_err)
+                        );
                         send_interface_state(
                             &uart_tx_queue_sender,
                             interface_state::encode_ap_start_error(
                                 InterfaceType::WiFiAccessPoint,
-                                start_err_code.unwrap_or(esp_idf_sys::ESP_ERR_INVALID_STATE),
+                                ap_err,
                             ),
                             "ap_start_error",
                         );
@@ -342,6 +356,7 @@ pub fn spawn_task(
                     }
                     if !ap_settings.enabled {
                         if !ap_disabled_reported {
+                            info!("WiFiAccessPoint disabled: code=0 ({})", ap_error_text(0));
                             send_interface_state(
                                 &uart_tx_queue_sender,
                                 interface_state::encode_ap_start_error(InterfaceType::WiFiAccessPoint, 0),

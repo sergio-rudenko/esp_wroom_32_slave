@@ -250,6 +250,49 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 { "connected": false, "error": 8 }
 ```
 
+Контракт payload `InterfaceState/disconnected`:
+
+| Поле | Тип | Обяз. | Описание |
+|---|---|---|---|
+| `connected` | `bool` | Да | Всегда `false` для события ошибки/разрыва |
+| `error` | `i32` | Да | Код ошибки/причины disconnect |
+
+Контракт `InterfaceState/WiFiStation.error`:
+
+| Код | Имя | Описание |
+|---|---|---|
+| `0` | `UnknownOrNotSet` | Причина не установлена |
+| `1` | `Unspecified` | Неуточненная причина |
+| `2` | `AuthExpire` | Истечение auth-сессии |
+| `3` | `AuthLeave` | Разрыв auth |
+| `4` | `AssocExpire` | Истечение ассоциации |
+| `5` | `AssocTooMany` | Слишком много ассоциаций |
+| `6` | `NotAuthed` | Клиент не аутентифицирован |
+| `7` | `NotAssoced` | Клиент не ассоциирован |
+| `8` | `AssocLeave` | Разрыв ассоциации |
+| `14` | `MicFailure` | MIC failure |
+| `15` | `FourWayHandshakeTimeout` | Таймаут 4-way handshake |
+| `16` | `GroupKeyUpdateTimeout` | Таймаут обновления группового ключа |
+| `23` | `Auth8021xFailed` | Ошибка 802.1X auth |
+| `39` | `Timeout` | Общий таймаут |
+| `46` | `PeerInitiated` | Разрыв инициирован peer |
+| `47` | `ApInitiated` | Разрыв инициирован AP |
+| `200` | `BeaconTimeout` | Таймаут beacon |
+| `201` | `NoApFound` | Точка доступа не найдена |
+| `202` | `AuthFail` | Ошибка аутентификации |
+| `203` | `AssocFail` | Ошибка ассоциации |
+| `204` | `HandshakeTimeout` | Таймаут handshake |
+| `205` | `ConnectionFail` | Общая ошибка соединения |
+| `206` | `ApTsfReset` | AP TSF reset |
+| `207` | `Roaming` | Роуминг |
+| `210` | `NoApFoundCompatibleSecurity` | Нет AP с совместимой безопасностью |
+| `211` | `NoApFoundAuthmodeThreshold` | Нет AP по порогу authmode |
+| `212` | `NoApFoundRssiThreshold` | Нет AP по порогу RSSI |
+
+Примечание:
+
+- в `error` также может прийти иной `esp_err_t` код (`i32`), если ошибка возникает на этапе вызовов ESP-IDF.
+
 Примечание по неверным credentials:
 
 - при ошибке аутентификации (например, `4WAY_HANDSHAKE_TIMEOUT`) прошивка отправляет `disconnected` с кодом ошибки;
@@ -306,6 +349,22 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 { "clientConnected": false, "mac": "11:22:33:44:55:66" }
 ```
 
+Контракт `InterfaceState/WiFiAccessPoint.error` (событие `started=false`):
+
+| Код | Имя | Описание |
+|---|---|---|
+| `0` | `AP_DISABLED` | AP выключен (`enabled=false`) |
+| `-1` | `ESP_FAIL` | Общая ошибка ESP-IDF |
+| `257` | `ESP_ERR_NO_MEM` | Недостаточно памяти |
+| `258` | `ESP_ERR_INVALID_ARG` | Невалидные аргументы |
+| `259` | `ESP_ERR_INVALID_STATE` | Невалидное состояние |
+| `262` | `ESP_ERR_NOT_SUPPORTED` | Операция не поддерживается |
+| `263` | `ESP_ERR_TIMEOUT` | Таймаут операции |
+
+Примечание:
+
+- для неизвестных кодов в логах используется текст `OTHER`, в payload передается фактический числовой код.
+
 ### 4.1.3 Ethernet
 
 `InterfaceSettings`, `PARAM = Ethernet`, payload:
@@ -340,6 +399,22 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - для стендовой проверки без мастера можно включить встроенный fallback-профиль в прошивке: `ETHERNET_MOCK_DHCP_ON_BOOT=true` (по умолчанию `false`).
 
 Состояния отправляются через `InterfaceState` аналогично STA (подключение, IP, ошибки, disconnect).
+
+Контракт `InterfaceState/Ethernet.error` (событие `connected=false`):
+
+| Код | Имя | Описание |
+|---|---|---|
+| `0` | `DISCONNECTED_OR_DISABLED` | Линк down или интерфейс выключен |
+| `-1` | `ESP_FAIL` | Общая ошибка ESP-IDF |
+| `257` | `ESP_ERR_NO_MEM` | Недостаточно памяти |
+| `258` | `ESP_ERR_INVALID_ARG` | Невалидные аргументы |
+| `259` | `ESP_ERR_INVALID_STATE` | Невалидное состояние |
+| `262` | `ESP_ERR_NOT_SUPPORTED` | Операция не поддерживается |
+| `263` | `ESP_ERR_TIMEOUT` | Таймаут операции |
+
+Примечание:
+
+- при ошибках Ethernet используется единый формат `{"connected": false, "error": CODE}`.
 
 ---
 
