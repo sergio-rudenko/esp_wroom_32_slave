@@ -21,8 +21,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::master::config::ETHERNET_MOCK_DHCP_ON_BOOT;
 use crate::master::messages::interface_settings::{EthernetSettings, InterfaceType};
 use crate::master::messages::interface_state;
+
+enum EthWaitOutcome {
+    Ready,
+    Timeout,
+}
 
 pub fn spawn_task(
     mac: MAC,
@@ -99,15 +105,24 @@ pub fn spawn_task(
             };
             lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
-            let mut settings = loop {
-                match ethernet_interface_settings_receiver.recv_timeout(Duration::from_secs(1)) {
-                    Ok(settings) => break settings,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        crate::system::wdt::feed("eth-task");
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        info!("Ethernet task stopped: event channel closed before first config");
-                        return;
+            let mut settings = if ETHERNET_MOCK_DHCP_ON_BOOT {
+                info!("Ethernet mock startup profile enabled: enabled=true, dhcp=true");
+                EthernetSettings {
+                    enabled: true,
+                    dhcp: true,
+                    static_config: None,
+                }
+            } else {
+                loop {
+                    match ethernet_interface_settings_receiver.recv_timeout(Duration::from_secs(1)) {
+                        Ok(settings) => break settings,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            crate::system::wdt::feed("eth-task");
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            info!("Ethernet task stopped: event channel closed before first config");
+                            return;
+                        }
                     }
                 }
             };
@@ -155,17 +170,18 @@ pub fn spawn_task(
                     continue;
                 }
 
-                if let Err(err) = eth.start() {
-                    warn!("Ethernet start failed: {err:#}");
-                    send_interface_state(
-                        &uart_tx_queue_sender,
-                        interface_state::encode_connect_error(InterfaceType::Ethernet, err.code()),
-                        "ethernet_connect_error",
-                    );
-                } else {
-                    info!("Ethernet started");
-                    match eth.wait_connected() {
-                        Ok(()) => {
+                let started_ok = ensure_ethernet_started(&mut eth, &uart_tx_queue_sender);
+                if started_ok {
+                    match wait_for_eth_connected_or_settings(
+                        &eth,
+                        &ethernet_interface_settings_receiver,
+                        LINK_MONITOR_POLL_MS,
+                    ) {
+                        Ok(Some(next_settings)) => {
+                            settings = next_settings;
+                            continue;
+                        }
+                        Ok(None) => {
                             info!("Ethernet link connected");
                             let mac = match eth.eth().netif().get_mac() {
                                 Ok(mac) => format_mac(mac),
@@ -180,8 +196,8 @@ pub fn spawn_task(
                                 "ethernet_connected",
                             );
 
-                            match eth.wait_netif_up() {
-                                Ok(()) => {
+                            match wait_for_eth_up(&eth, Duration::from_secs(15), LINK_MONITOR_POLL_MS) {
+                                EthWaitOutcome::Ready => {
                                     info!("Ethernet netif is up");
                                     if !link_registered {
                                         connected_links.fetch_add(1, Ordering::SeqCst);
@@ -237,29 +253,24 @@ pub fn spawn_task(
                                         }
                                     }
                                 }
-                                Err(err) => {
-                                    warn!("Ethernet netif-up wait failed: {err:#}");
+                                EthWaitOutcome::Timeout => {
+                                    warn!("Ethernet netif-up wait timed out");
                                     send_interface_state(
                                         &uart_tx_queue_sender,
                                         interface_state::encode_connect_error(
                                             InterfaceType::Ethernet,
-                                            err.code(),
+                                            esp_idf_sys::ESP_ERR_TIMEOUT,
                                         ),
                                         "ethernet_connect_error",
                                     );
                                 }
                             }
                         }
-                        Err(err) => {
-                            warn!("Ethernet wait_connected failed: {err:#}");
-                            send_interface_state(
-                                &uart_tx_queue_sender,
-                                interface_state::encode_connect_error(
-                                    InterfaceType::Ethernet,
-                                    err.code(),
-                                ),
-                                "ethernet_connect_error",
-                            );
+                        Err(()) => {
+                            if link_registered {
+                                connected_links.fetch_sub(1, Ordering::SeqCst);
+                            }
+                            return;
                         }
                     }
                 }
@@ -337,6 +348,96 @@ fn monitor_link_state(
             last_report = Instant::now();
         }
 
+        thread::sleep(Duration::from_millis(poll_ms as u64));
+    }
+}
+
+fn ensure_ethernet_started(
+    eth: &mut BlockingEth<EspEth<'_, RmiiEth>>,
+    uart_tx_queue_sender: &mpsc::Sender<Vec<u8>>,
+) -> bool {
+    let already_started = match eth.is_started() {
+        Ok(v) => v,
+        Err(err) => {
+            warn!("Ethernet is_started check failed: {err:#}");
+            false
+        }
+    };
+
+    if already_started {
+        info!("Ethernet driver already started");
+        return true;
+    }
+
+    match eth.start() {
+        Ok(()) => {
+            info!("Ethernet started");
+            true
+        }
+        Err(err) => {
+            if err.code() == esp_idf_sys::ESP_ERR_INVALID_STATE {
+                info!("Ethernet start returned already started state");
+                true
+            } else {
+                warn!("Ethernet start failed: {err:#}");
+                send_interface_state(
+                    uart_tx_queue_sender,
+                    interface_state::encode_connect_error(InterfaceType::Ethernet, err.code()),
+                    "ethernet_connect_error",
+                );
+                false
+            }
+        }
+    }
+}
+
+fn wait_for_eth_connected_or_settings(
+    eth: &BlockingEth<EspEth<'_, RmiiEth>>,
+    ethernet_interface_settings_receiver: &mpsc::Receiver<EthernetSettings>,
+    poll_ms: u32,
+) -> Result<Option<EthernetSettings>, ()> {
+    loop {
+        crate::system::wdt::feed("eth-task");
+        match ethernet_interface_settings_receiver.try_recv() {
+            Ok(next_settings) => return Ok(Some(next_settings)),
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => return Err(()),
+        }
+        let connected = match eth.is_connected() {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("Ethernet is_connected check failed: {err:#}");
+                false
+            }
+        };
+        if connected {
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(poll_ms as u64));
+    }
+}
+
+fn wait_for_eth_up(
+    eth: &BlockingEth<EspEth<'_, RmiiEth>>,
+    timeout: Duration,
+    poll_ms: u32,
+) -> EthWaitOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        crate::system::wdt::feed("eth-task");
+        let up = match eth.is_up() {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("Ethernet is_up check failed: {err:#}");
+                false
+            }
+        };
+        if up {
+            return EthWaitOutcome::Ready;
+        }
+        if Instant::now() >= deadline {
+            return EthWaitOutcome::Timeout;
+        }
         thread::sleep(Duration::from_millis(poll_ms as u64));
     }
 }

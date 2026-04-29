@@ -185,14 +185,6 @@ def default_ethernet_settings() -> dict[str, Any]:
     }
 
 
-def default_ethernet_dhcp_mock_settings() -> dict[str, Any]:
-    # Dedicated quick-test profile for Ethernet link/IP bring-up checks.
-    return {
-        "enabled": True,
-        "dhcp": True,
-    }
-
-
 def default_wifi_ap_settings() -> dict[str, Any]:
     return {
         "enabled": True,
@@ -403,11 +395,6 @@ def parse_args() -> argparse.Namespace:
         help="Override Ethernet settings JSON object",
     )
     parser.add_argument(
-        "--send-ethernet-dhcp-mock",
-        action="store_true",
-        help="Send dedicated Ethernet DHCP mock config (enabled=true, dhcp=true)",
-    )
-    parser.add_argument(
         "--send-wifi-ap",
         action="store_true",
         help="Send InterfaceSettings/WiFiAccessPoint after startup",
@@ -477,12 +464,7 @@ def main() -> None:
     setup_logging(args.verbose)
 
     wifi_settings = args.wifi_json if args.wifi_json is not None else default_wifi_station_settings()
-    if args.send_ethernet_dhcp_mock:
-        ethernet_settings = default_ethernet_dhcp_mock_settings()
-    else:
-        ethernet_settings = (
-            args.ethernet_json if args.ethernet_json is not None else default_ethernet_settings()
-        )
+    ethernet_settings = args.ethernet_json if args.ethernet_json is not None else default_ethernet_settings()
     wifi_ap_settings = args.wifi_ap_json if args.wifi_ap_json is not None else default_wifi_ap_settings()
     udp_settings = (
         args.udp_listener_json if args.udp_listener_json is not None else default_udp_listener_settings()

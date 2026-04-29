@@ -57,6 +57,13 @@ Implemented:
   - `dhcp=true`: DHCP client mode
   - `dhcp=false`: static `ip/netmask/gateway/dns/secondary_dns` is parsed and applied to netif
 - Ethernet LAN8720 RMII task (`ethernet.rs`): link monitor, `InterfaceState`; same **`lwip_socket_gate`** pattern after `EthDriver` / `BlockingEth` init
+- Ethernet runtime hardening and board alignment:
+  - RMII clock is configured as internal output on `GPIO16` (`OutputGpio16`) to match validated ESP-AT wiring
+  - PHY power is explicitly enabled on `GPIO5` before EMAC/PHY init (with startup delay)
+  - PHY address uses autodetect (`ESP_ETH_PHY_ADDR_AUTO`)
+  - startup fallback profile is available in firmware via `master::config::ETHERNET_MOCK_DHCP_ON_BOOT` (`enabled=true`, `dhcp=true`) for link tests without master config
+  - blocking `wait_connected`/`wait_netif_up` paths were replaced with WDT-safe polling waits
+  - after cable unplug, task waits for link recovery without periodic `connect_error` spam, while still emitting `ethernet_disconnected` on link loss
 - `WifiScan` message flow implemented:
   - inbound (`STM32 -> ESP32`): MsgPack `{ "limit": N }`, `PARAM=0`
   - handled by `network/wifi` task, which performs Wi-Fi scan

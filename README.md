@@ -330,6 +330,13 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 | `dhcp` | `bool` | Да | `true/false` | Режим IP |
 | `static` | `string[5]` | Усл. | `dhcp=false` | `[ip, mask, gw, dns1, dns2]` |
 
+Примечания по текущей реализации Ethernet:
+
+- для LAN8720 используется RMII clock output с ESP32 на `GPIO16`;
+- питание PHY включается на `GPIO5` перед инициализацией;
+- при потере линка отправляется `ethernet_disconnected`, после чего прошивка ожидает восстановление линка без периодического спама `ethernet_connect_error`;
+- для стендовой проверки без мастера можно включить встроенный fallback-профиль в прошивке: `ETHERNET_MOCK_DHCP_ON_BOOT=true` (DHCP).
+
 Состояния отправляются через `InterfaceState` аналогично STA (подключение, IP, ошибки, disconnect).
 
 ---
