@@ -43,6 +43,11 @@ Implemented:
   - `ServiceType::TcpServer` (`port`, `clientTimeout`)
   - `ServiceType::NtpClient` (`enabled`, `timezone`, `resyncPeriod`, `servers`)
 - Wi-Fi runtime task (`network/wifi/mod.rs`): connect/reconnect, `InterfaceState` events, RSSI, disconnect reason text in logs; **`lwip_socket_gate`** increment after `EspWifi` / `BlockingWifi` init (success or fatal error)
+- Wi-Fi invalid-credentials path hardened:
+  - `wait_netif_up` replaced with bounded polling (`wait_for_netif_up_or_disconnect`, 15s timeout)
+  - WDT feed is guaranteed during netif-up wait and during pre-retry idle waits
+  - `connect_error` + `disconnected` are emitted on early disconnect (e.g. `4WAY_HANDSHAKE_TIMEOUT`)
+  - Wi-Fi disconnect reasons are centralized in typed enum `WifiDisconnectReason` (`network/wifi/state.rs`)
 - Wi-Fi AP (`WiFiAccessPoint`) runtime is implemented inside `network/wifi/mod.rs` using one shared Wi-Fi driver:
   - accepts AP settings (`enabled`, `ssid`, `password`, `channel`, `maxClients`, `static[ip,mask]`)
   - applies AP-only or AP+STA (`Configuration::AccessPoint` / `Configuration::Mixed`) depending on station state
@@ -141,6 +146,14 @@ Confirmed local build command sequence:
 3. `export IDF_TOOLS_PATH=/mnt/projects/esp_wroom_32_slave/.embuild/espressif`
 4. `cargo build --target xtensa-esp32-espidf`
 
+`tools/build_firmware.sh` now additionally enforces environment/build safety:
+
+- auto-sources `~/export-esp.sh` when present
+- auto-detects project-local ESP-IDF at `.embuild/espressif/esp-idf/v5.2.3` when `IDF_PATH` is missing
+- defaults to `ESP_IDF_TOOLS_INSTALL_DIR=global` (`IDF_TOOLS_PATH=~/.espressif`) to avoid project-filesystem symlink issues in Python venv creation
+- defaults `CARGO_TARGET_DIR` to `~/.cache/esp_wroom_32_slave/target` to avoid `/mnt/...` symlink restrictions during ESP-IDF CMake stage
+- regenerates `partition-table.bin` from project `partitions.csv` before image merge to guarantee custom partition layout in final `firmware.bin`
+
 Errors solved during recovery:
 
 - `ensurepip is not available` during `install-python-env` -> install `python3.12-venv`
@@ -149,6 +162,8 @@ Errors solved during recovery:
 - `xtensa-esp32-elf-gcc ... --ldproxy-linker` unknown option -> install/use `ldproxy` as linker
 - `undefined reference to __pender` -> remove `embassy-time-driver` feature from `esp-idf-svc`
 - **`Invalid mbox` / `tcpip_send_msg_wait_sem`** when opening UDP during Wi-Fi init -> **`lwip_socket_gate`**: STA and ETH tasks increment after their lwIP init; UDP listener waits for expected count before `UdpSocket::bind`
+- `Image length ... doesn't fit in partition length 1048576` at boot -> enforce custom partition table (`sdkconfig.defaults` + partition table regeneration in `build_firmware.sh`)
+- `task_wdt` trigger while testing bad Wi-Fi credentials -> remove blocking netif-up wait and emit deterministic STA error/disconnect states
 
 ## Next engineering steps
 

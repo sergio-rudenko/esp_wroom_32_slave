@@ -27,8 +27,14 @@ use self::ip::{apply_ap_ip_settings, apply_sta_ip_settings};
 use self::scan::process_wifi_scan_requests;
 use self::state::{
     disconnect_reason_text, format_mac, recv_next_or_stop, report_rssi_once, resolve_connect_error_code,
-    send_interface_state,
+    send_interface_state, WifiDisconnectReason,
 };
+
+enum NetifWaitOutcome {
+    Up,
+    Disconnected(i32),
+    Timeout,
+}
 
 pub fn spawn_task(
     modem: Modem,
@@ -202,6 +208,7 @@ pub fn spawn_task(
                                     &wifi_scan_receiver,
                                     &uart_tx_queue_sender,
                                 );
+                                crate::system::wdt::feed("wifi-task");
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 info!("WiFi task stopped: event channel closed");
@@ -371,7 +378,12 @@ pub fn spawn_task(
                         continue;
                     }
 
-                    match wifi.connect() {
+                    crate::system::wdt::unsubscribe_current_task("wifi-task");
+                    let connect_result = wifi.connect();
+                    crate::system::wdt::subscribe_current_task("wifi-task");
+                    crate::system::wdt::feed("wifi-task");
+
+                    match connect_result {
                         Ok(()) => {
                             info!("WiFiStation connect requested");
                             let mac = match wifi.wifi().get_mac(WifiDeviceId::Sta) {
@@ -394,8 +406,12 @@ pub fn spawn_task(
                             };
                             info!("WiFiStation connected with MAC {mac}");
 
-                            match wifi.wait_netif_up() {
-                                Ok(()) => {
+                            match wait_for_netif_up_or_disconnect(
+                                &mut wifi,
+                                &disconnect_reason,
+                                Duration::from_secs(15),
+                            ) {
+                                NetifWaitOutcome::Up => {
                                     info!("WiFiStation netif is up");
                                     if !link_registered {
                                         connected_links.fetch_add(1, Ordering::SeqCst);
@@ -457,13 +473,37 @@ pub fn spawn_task(
                                         }
                                     }
                                 }
-                                Err(err) => {
-                                    warn!("WiFiStation netif-up wait failed: {err:#}");
+                                NetifWaitOutcome::Disconnected(reason) => {
+                                    warn!(
+                                        "WiFiStation disconnected before netif-up: reason={} ({})",
+                                        reason,
+                                        disconnect_reason_text(reason)
+                                    );
                                     send_interface_state(
                                         &uart_tx_queue_sender,
                                         interface_state::encode_connect_error(
                                             InterfaceType::WiFiStation,
-                                            resolve_connect_error_code(err.code(), &disconnect_reason),
+                                            if reason != 0 {
+                                                reason
+                                            } else {
+                                                WifiDisconnectReason::Timeout as i32
+                                            },
+                                        ),
+                                        "connect_error",
+                                    );
+                                    send_interface_state(
+                                        &uart_tx_queue_sender,
+                                        interface_state::encode_disconnected(InterfaceType::WiFiStation, reason),
+                                        "disconnected",
+                                    );
+                                }
+                                NetifWaitOutcome::Timeout => {
+                                    warn!("WiFiStation netif-up wait timed out");
+                                    send_interface_state(
+                                        &uart_tx_queue_sender,
+                                        interface_state::encode_connect_error(
+                                            InterfaceType::WiFiStation,
+                                            WifiDisconnectReason::Timeout as i32,
                                         ),
                                         "connect_error",
                                     );
@@ -616,5 +656,44 @@ fn monitor_connected_state(
         }
 
         thread::sleep(Duration::from_millis(poll_ms as u64));
+    }
+}
+
+fn wait_for_netif_up_or_disconnect(
+    wifi: &mut BlockingWifi<EspWifi<'_>>,
+    disconnect_reason: &AtomicI32,
+    timeout: Duration,
+) -> NetifWaitOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        crate::system::wdt::feed("wifi-task");
+
+        let up = match wifi.is_up() {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("WiFiStation is_up check failed during netif-up wait: {err:#}");
+                false
+            }
+        };
+        if up {
+            return NetifWaitOutcome::Up;
+        }
+
+        let connected = match wifi.is_connected() {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("WiFiStation is_connected check failed during netif-up wait: {err:#}");
+                false
+            }
+        };
+        if !connected {
+            let reason = disconnect_reason.swap(0, Ordering::Relaxed);
+            return NetifWaitOutcome::Disconnected(reason);
+        }
+
+        if Instant::now() >= deadline {
+            return NetifWaitOutcome::Timeout;
+        }
+        thread::sleep(Duration::from_millis(250));
     }
 }

@@ -254,6 +254,11 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 { "connected": false, "reason": 8 }
 ```
 
+Примечание по неверным credentials:
+
+- при ошибке аутентификации (например, `4WAY_HANDSHAKE_TIMEOUT`) прошивка отправляет `connect_error`, затем `disconnected`;
+- ожидание поднятия netif ограничено по времени и не блокирует WDT.
+
 ### 4.1.2 WiFi AP
 
 `InterfaceSettings`, `PARAM = WiFiAccessPoint`, payload:
@@ -555,9 +560,14 @@ python3 tools/mock_master_uart.py /dev/ttyUSB0 --send all -v
 
 Шаги скрипта:
 
-1. `cargo build --release`;
-2. `espflash save-image` (ELF -> app image);
-3. `esptool merge-bin` (bootloader + partition-table + app -> `firmware.bin`).
+1. подготавливает ESP-IDF окружение (`export-esp.sh`, `IDF_PATH`, `IDF_TOOLS_PATH`, `ESP_IDF_TOOLS_INSTALL_DIR=global`);
+2. при необходимости выносит `CARGO_TARGET_DIR` в `$HOME/.cache/...` (для ФС без поддержки symlink);
+3. `cargo build --release`;
+4. принудительно пересобирает `partition-table.bin` из проектного `partitions.csv`;
+5. `espflash save-image` (ELF -> app image);
+6. `esptool merge-bin` (bootloader + partition-table + app -> `firmware.bin`).
+
+Это гарантирует, что в итоговый `firmware.bin` попадает актуальная кастомная partition table (увеличенный `factory`), даже если промежуточная сборка ESP-IDF использовала дефолтный профиль.
 
 После сборки:
 
