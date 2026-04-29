@@ -26,7 +26,7 @@ use crate::master::messages::interface_settings::{InterfaceType, WiFiAccessPoint
 use crate::master::messages::interface_state;
 use crate::master::messages::wifi_scan::WifiScanRequestMessage;
 
-use self::config::{build_ap_configuration, compose_wifi_mode_configuration, default_ap_settings};
+use self::config::{build_ap_configuration, compose_wifi_mode_configuration, default_ap_settings, default_sta_settings};
 use self::ip::{apply_ap_ip_settings, apply_sta_ip_settings};
 use self::scan::process_wifi_scan_requests;
 use self::state::{
@@ -47,7 +47,7 @@ pub fn spawn_task(
     wifi_station_interface_settings_receiver: mpsc::Receiver<WiFiStationSettings>,
     wifi_ap_interface_settings_receiver: mpsc::Receiver<WiFiAccessPointSettings>,
     wifi_scan_receiver: mpsc::Receiver<WifiScanRequestMessage>,
-    tcp_server_network_reset_sender: mpsc::Sender<()>,
+    _tcp_server_network_reset_sender: mpsc::Sender<()>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
     // Incremented once after Wi-Fi / lwIP init (success or fatal error) so UDP can avoid racing
     // `EspWifi::new` with `std::net::UdpSocket::bind`.
@@ -149,24 +149,26 @@ pub fn spawn_task(
             };
             lwip_socket_gate.fetch_add(1, Ordering::SeqCst);
 
-            let mut sta_settings = loop {
-                match wifi_station_interface_settings_receiver.recv_timeout(Duration::from_millis(250)) {
-                    Ok(sta_settings) => break sta_settings,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        process_wifi_scan_requests(&mut wifi, &wifi_scan_receiver, &uart_tx_queue_sender);
-                        crate::system::wdt::feed("wifi-task");
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        info!("WiFi task stopped: event channel closed before first config");
-                        return;
-                    }
-                }
-            };
+            let mut sta_settings = default_sta_settings();
             let mut ap_settings = default_ap_settings();
             let mut link_registered = false;
+            let mut ap_started_reported = false;
+            let mut ap_disabled_reported = false;
+            let mut sta_disconnected_reported = false;
+            let mut wifi_mode_active_logged = false;
 
             loop {
                 crate::system::wdt::feed("wifi-task");
+                while let Ok(next_sta_settings) = wifi_station_interface_settings_receiver.try_recv() {
+                    sta_settings = next_sta_settings;
+                    info!(
+                        "WiFiStation settings updated: enabled={}, ssid='{}', dhcp={}, reconnectPeriod={}s",
+                        sta_settings.enabled,
+                        sta_settings.ssid,
+                        sta_settings.dhcp,
+                        sta_settings.reconnect_period
+                    );
+                }
                 while let Ok(next_ap_settings) = wifi_ap_interface_settings_receiver.try_recv() {
                     ap_settings = next_ap_settings;
                     info!(
@@ -175,61 +177,18 @@ pub fn spawn_task(
                     );
                 }
 
-                info!(
-                    "WiFiStation settings: enabled={}, ssid='{}', dhcp={}, reconnectPeriod={}s",
-                    sta_settings.enabled, sta_settings.ssid, sta_settings.dhcp, sta_settings.reconnect_period
-                );
-
-                if !sta_settings.enabled && !ap_settings.enabled {
-                    process_wifi_scan_requests(&mut wifi, &wifi_scan_receiver, &uart_tx_queue_sender);
-                    if link_registered {
-                        connected_links.fetch_sub(1, Ordering::SeqCst);
-                        link_registered = false;
-                    }
-                    notify_tcp_network_reset(&tcp_server_network_reset_sender);
-                    if let Err(err) = wifi.stop() {
-                        warn!("WiFiStation stop failed: {err:#}");
-                    } else {
-                        info!("WiFiStation disabled");
-                        send_interface_state(
-                            &uart_tx_queue_sender,
-                            interface_state::encode_disconnected(
-                                InterfaceType::WiFiStation,
-                                disconnect_reason.swap(0, Ordering::Relaxed),
-                            ),
-                            "disconnected",
-                        );
-                    }
-
-                    sta_settings = loop {
-                        match wifi_station_interface_settings_receiver
-                            .recv_timeout(Duration::from_millis(250))
-                        {
-                            Ok(next_sta_settings) => break next_sta_settings,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                process_wifi_scan_requests(
-                                    &mut wifi,
-                                    &wifi_scan_receiver,
-                                    &uart_tx_queue_sender,
-                                );
-                                crate::system::wdt::feed("wifi-task");
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                info!("WiFi task stopped: event channel closed");
-                                return;
-                            }
-                        }
-                    };
-                    continue;
-                }
-
                 let auth_method = if sta_settings.password.is_empty() {
                     AuthMethod::None
                 } else {
                     AuthMethod::WPA2Personal
                 };
 
-                let ssid = match sta_settings.ssid.as_str().try_into() {
+                let effective_ssid = if sta_settings.enabled {
+                    sta_settings.ssid.as_str()
+                } else {
+                    "disabled"
+                };
+                let ssid = match effective_ssid.try_into() {
                     Ok(v) => v,
                     Err(_) => {
                         warn!("WiFiStation event skipped: SSID is invalid for ESP-IDF");
@@ -241,7 +200,12 @@ pub fn spawn_task(
                     }
                 };
 
-                let password = match sta_settings.password.as_str().try_into() {
+                let effective_password = if sta_settings.enabled {
+                    sta_settings.password.as_str()
+                } else {
+                    ""
+                };
+                let password = match effective_password.try_into() {
                     Ok(v) => v,
                     Err(_) => {
                         warn!("WiFiStation event skipped: password is invalid for ESP-IDF");
@@ -284,13 +248,6 @@ pub fn spawn_task(
                     &ap_settings,
                     &ap_cfg,
                 );
-                if let Err(err) = restart_wifi_for_reconfigure(
-                    &mut wifi,
-                    &tcp_server_network_reset_sender,
-                ) {
-                    warn!("WiFi pre-reconfigure restart failed: {err:#}");
-                }
-
                 if let Err(err) = wifi.set_configuration(&wifi_mode_cfg) {
                     warn!("WiFiStation set_configuration failed: {err:#}");
                     sta_settings = match recv_next_or_stop(&wifi_station_interface_settings_receiver) {
@@ -299,18 +256,20 @@ pub fn spawn_task(
                     };
                     continue;
                 }
-                if let Err(err) = apply_sta_ip_settings(&mut wifi, &sta_settings) {
-                    warn!("WiFiStation IP settings apply failed: {err:#}");
-                    send_interface_state(
-                        &uart_tx_queue_sender,
-                        interface_state::encode_connect_error(InterfaceType::WiFiStation, err.code()),
-                        "connect_error",
-                    );
-                    sta_settings = match recv_next_or_stop(&wifi_station_interface_settings_receiver) {
-                        Ok(next_sta_settings) => next_sta_settings,
-                        Err(()) => return,
-                    };
-                    continue;
+                if sta_settings.enabled {
+                    if let Err(err) = apply_sta_ip_settings(&mut wifi, &sta_settings) {
+                        warn!("WiFiStation IP settings apply failed: {err:#}");
+                        send_interface_state(
+                            &uart_tx_queue_sender,
+                            interface_state::encode_connect_error(InterfaceType::WiFiStation, err.code()),
+                            "connect_error",
+                        );
+                        sta_settings = match recv_next_or_stop(&wifi_station_interface_settings_receiver) {
+                            Ok(next_sta_settings) => next_sta_settings,
+                            Err(()) => return,
+                        };
+                        continue;
+                    }
                 }
                 if let Err(err) = apply_ap_ip_settings(&mut wifi, &ap_settings) {
                     warn!("WiFiAccessPoint IP settings apply failed: {err:#}");
@@ -329,13 +288,29 @@ pub fn spawn_task(
                     continue;
                 }
 
-                if let Err(err) = wifi.start() {
-                    warn!("WiFiStation start failed: {err:#}");
+                let (started_ok, start_err_code) = match wifi.is_started() {
+                    Ok(true) => (true, None),
+                    Ok(false) => match wifi.start() {
+                        Ok(()) => (true, None),
+                        Err(err) => {
+                            warn!("WiFiStation start failed: {err:#}");
+                            (false, Some(err.code()))
+                        }
+                    },
+                    Err(err) => {
+                        warn!("WiFi is_started failed: {err:#}");
+                        (false, Some(err.code()))
+                    }
+                };
+                if !started_ok {
                     send_interface_state(
                         &uart_tx_queue_sender,
                         interface_state::encode_connect_error(
                             InterfaceType::WiFiStation,
-                            resolve_connect_error_code(err.code(), &disconnect_reason),
+                            resolve_connect_error_code(
+                                start_err_code.unwrap_or(esp_idf_sys::ESP_ERR_INVALID_STATE),
+                                &disconnect_reason,
+                            ),
                         ),
                         "connect_error",
                     );
@@ -344,46 +319,68 @@ pub fn spawn_task(
                             &uart_tx_queue_sender,
                             interface_state::encode_ap_start_error(
                                 InterfaceType::WiFiAccessPoint,
-                                err.code(),
+                                start_err_code.unwrap_or(esp_idf_sys::ESP_ERR_INVALID_STATE),
                             ),
                             "ap_start_error",
                         );
                     }
                 } else {
-                    info!("WiFiStation started");
-                    if ap_settings.enabled {
-                        send_interface_state(
-                            &uart_tx_queue_sender,
-                            interface_state::encode_ap_started(InterfaceType::WiFiAccessPoint),
-                            "ap_started",
-                        );
+                    if !wifi_mode_active_logged {
+                        info!("WiFi AP+STA mode active");
+                        wifi_mode_active_logged = true;
                     }
-                    if !sta_settings.enabled {
-                        loop {
-                            process_wifi_scan_requests(
-                                &mut wifi,
-                                &wifi_scan_receiver,
+                    if ap_settings.enabled {
+                        if !ap_started_reported {
+                            send_interface_state(
                                 &uart_tx_queue_sender,
+                                interface_state::encode_ap_started(InterfaceType::WiFiAccessPoint),
+                                "ap_started",
                             );
-                            if let Ok(next_sta_settings) =
-                                wifi_station_interface_settings_receiver.try_recv()
-                            {
-                                sta_settings = next_sta_settings;
-                                break;
-                            }
-                            if let Ok(next_ap_settings) = wifi_ap_interface_settings_receiver.try_recv() {
-                                ap_settings = next_ap_settings;
-                                info!("WiFiAccessPoint got updated config");
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(250));
-                            crate::system::wdt::feed("wifi-task");
+                            ap_started_reported = true;
+                            ap_disabled_reported = false;
                         }
-                        continue;
+                    }
+                    if !ap_settings.enabled {
+                        if !ap_disabled_reported {
+                            send_interface_state(
+                                &uart_tx_queue_sender,
+                                interface_state::encode_ap_start_error(InterfaceType::WiFiAccessPoint, 0),
+                                "ap_disabled",
+                            );
+                            ap_disabled_reported = true;
+                            ap_started_reported = false;
+                        }
                     }
 
+                    if !sta_settings.enabled {
+                        if link_registered {
+                            connected_links.fetch_sub(1, Ordering::SeqCst);
+                            link_registered = false;
+                        }
+                        let _ = wifi.disconnect();
+                        if !sta_disconnected_reported {
+                            send_interface_state(
+                                &uart_tx_queue_sender,
+                                interface_state::encode_disconnected(
+                                    InterfaceType::WiFiStation,
+                                    disconnect_reason.swap(0, Ordering::Relaxed),
+                                ),
+                                "disconnected",
+                            );
+                            sta_disconnected_reported = true;
+                        }
+                        process_wifi_scan_requests(&mut wifi, &wifi_scan_receiver, &uart_tx_queue_sender);
+                        thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                    wifi_mode_active_logged = false;
+                    sta_disconnected_reported = false;
+
                     crate::system::wdt::unsubscribe_current_task("wifi-task");
-                    let connect_result = wifi.connect();
+                    let connect_result = match wifi.is_connected() {
+                        Ok(true) => Ok(()),
+                        _ => wifi.connect(),
+                    };
                     crate::system::wdt::subscribe_current_task("wifi-task");
                     crate::system::wdt::feed("wifi-task");
 
@@ -566,24 +563,6 @@ pub fn spawn_task(
         })
         .map(|_| ())
         .map_err(|err| anyhow::anyhow!("failed to spawn WiFiStation task: {err}"))
-}
-
-fn restart_wifi_for_reconfigure(
-    wifi: &mut BlockingWifi<EspWifi<'_>>,
-    tcp_server_network_reset_sender: &mpsc::Sender<()>,
-) -> Result<()> {
-    if !wifi.is_started()? {
-        return Ok(());
-    }
-    notify_tcp_network_reset(tcp_server_network_reset_sender);
-    wifi.stop()?;
-    Ok(())
-}
-
-fn notify_tcp_network_reset(sender: &mpsc::Sender<()>) {
-    if let Err(err) = sender.send(()) {
-        warn!("Failed to notify TCP server about network reset: {err}");
-    }
 }
 
 fn monitor_connected_state(

@@ -48,6 +48,10 @@ Implemented:
   - WDT feed is guaranteed during netif-up wait and during pre-retry idle waits
   - `connect_error` + `disconnected` are emitted on early disconnect (e.g. `4WAY_HANDSHAKE_TIMEOUT`)
   - Wi-Fi disconnect reasons are centralized in typed enum `WifiDisconnectReason` (`network/wifi/state.rs`)
+- Wi-Fi STA/AP runtime updated to simultaneous operation:
+  - driver is configured in `STA+AP` mode (`Configuration::Mixed`) and not restarted on every settings update
+  - STA and AP are controlled independently via their `enabled` flags in `InterfaceSettings`
+  - repeated unchanged `InterfaceState` notifications (`ap_disabled`, `disconnected`) are suppressed to avoid UART/log spam
 - Wi-Fi AP (`WiFiAccessPoint`) runtime is implemented inside `network/wifi/mod.rs` using one shared Wi-Fi driver:
   - accepts AP settings (`enabled`, `ssid`, `password`, `channel`, `maxClients`, `static[ip,mask]`)
   - applies AP-only or AP+STA (`Configuration::AccessPoint` / `Configuration::Mixed`) depending on station state
@@ -61,7 +65,7 @@ Implemented:
   - RMII clock is configured as internal output on `GPIO16` (`OutputGpio16`) to match validated ESP-AT wiring
   - PHY power is explicitly enabled on `GPIO5` before EMAC/PHY init (with startup delay)
   - PHY address uses autodetect (`ESP_ETH_PHY_ADDR_AUTO`)
-  - startup fallback profile is available in firmware via `master::config::ETHERNET_MOCK_DHCP_ON_BOOT` (`enabled=true`, `dhcp=true`) for link tests without master config
+  - startup fallback profile is available in firmware via `master::config::ETHERNET_MOCK_DHCP_ON_BOOT` (`enabled=true`, `dhcp=true`) for link tests without master config (default is `false`)
   - blocking `wait_connected`/`wait_netif_up` paths were replaced with WDT-safe polling waits
   - after cable unplug, task waits for link recovery without periodic `connect_error` spam, while still emitting `ethernet_disconnected` on link loss
 - `WifiScan` message flow implemented:
@@ -171,6 +175,7 @@ Errors solved during recovery:
 - **`Invalid mbox` / `tcpip_send_msg_wait_sem`** when opening UDP during Wi-Fi init -> **`lwip_socket_gate`**: STA and ETH tasks increment after their lwIP init; UDP listener waits for expected count before `UdpSocket::bind`
 - `Image length ... doesn't fit in partition length 1048576` at boot -> enforce custom partition table (`sdkconfig.defaults` + partition table regeneration in `build_firmware.sh`)
 - `task_wdt` trigger while testing bad Wi-Fi credentials -> remove blocking netif-up wait and emit deterministic STA error/disconnect states
+- repeated Wi-Fi state spam with `enabled=false` -> apply state transitions only on change, keep steady-state loops quiet
 
 ## Next engineering steps
 

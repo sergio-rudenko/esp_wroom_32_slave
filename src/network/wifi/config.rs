@@ -3,6 +3,17 @@ use esp_idf_hal::sys::EspError;
 
 use crate::master::messages::interface_settings::{WiFiAccessPointSettings, WiFiStationSettings};
 
+pub fn default_sta_settings() -> WiFiStationSettings {
+    WiFiStationSettings {
+        enabled: false,
+        ssid: String::from("disabled"),
+        password: String::new(),
+        reconnect_period: 15,
+        dhcp: true,
+        static_config: None,
+    }
+}
+
 pub fn default_ap_settings() -> WiFiAccessPointSettings {
     WiFiAccessPointSettings {
         enabled: false,
@@ -49,10 +60,6 @@ pub fn compose_wifi_mode_configuration(
     ap_settings: &WiFiAccessPointSettings,
     ap_cfg: &AccessPointConfiguration,
 ) -> Configuration {
-    match (station_settings.enabled, ap_settings.enabled) {
-        (true, true) => Configuration::Mixed(station_cfg.clone(), ap_cfg.clone()),
-        (true, false) => Configuration::Client(station_cfg.clone()),
-        (false, true) => Configuration::AccessPoint(ap_cfg.clone()),
-        (false, false) => Configuration::None,
-    }
+    let _ = (station_settings, ap_settings);
+    Configuration::Mixed(station_cfg.clone(), ap_cfg.clone())
 }

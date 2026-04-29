@@ -239,11 +239,11 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 
 - connected:
 ```json
-{ "connected": true, "mac": "94:B9:7E:C2:EC:C4" }
+{ "connected": true }
 ```
 - got_ip:
 ```json
-{ "ip": ["192.168.1.100", "255.255.255.0", "192.168.1.1"] }
+{ "mac": "94:B9:7E:C2:EC:C4", "ip": ["192.168.1.100", "255.255.255.0", "192.168.1.1", "8.8.8.8", "8.8.4.4"] }
 ```
 - connect_error:
 ```json
@@ -258,6 +258,12 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 
 - при ошибке аутентификации (например, `4WAY_HANDSHAKE_TIMEOUT`) прошивка отправляет `connect_error`, затем `disconnected`;
 - ожидание поднятия netif ограничено по времени и не блокирует WDT.
+
+Режим работы STA/AP:
+
+- Wi-Fi поднимается в режиме `STA+AP` и дальше управляется через `InterfaceSettings` каждого интерфейса;
+- `enabled=false` для STA/AP не вызывает перезапуск драйвера, а переводит соответствующую часть в down-состояние;
+- однотипные `InterfaceState` не спамятся в UART при неизменных настройках.
 
 ### 4.1.2 WiFi AP
 
@@ -335,7 +341,7 @@ SOF(1) + LEN(2, LE) + CMD(1) + PARAM(1) + PAYLOAD(LEN) + CRC16(2, LE)
 - для LAN8720 используется RMII clock output с ESP32 на `GPIO16`;
 - питание PHY включается на `GPIO5` перед инициализацией;
 - при потере линка отправляется `ethernet_disconnected`, после чего прошивка ожидает восстановление линка без периодического спама `ethernet_connect_error`;
-- для стендовой проверки без мастера можно включить встроенный fallback-профиль в прошивке: `ETHERNET_MOCK_DHCP_ON_BOOT=true` (DHCP).
+- для стендовой проверки без мастера можно включить встроенный fallback-профиль в прошивке: `ETHERNET_MOCK_DHCP_ON_BOOT=true` (по умолчанию `false`).
 
 Состояния отправляются через `InterfaceState` аналогично STA (подключение, IP, ошибки, disconnect).
 
