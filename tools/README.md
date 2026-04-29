@@ -84,6 +84,7 @@ python tools/mock_master_uart.py COM2
 - `--send wifi|ethernet|ap|all|none` — что отправлять при старте (по умолчанию `all`);
 - `--wifi-json '{...}'` — override WiFiStation-конфига JSON-объектом;
 - `--ethernet-json '{...}'` — override Ethernet-конфига JSON-объектом;
+- `--send-ethernet-dhcp-mock` — отправить mock Ethernet-профиль для проверки (`{"enabled":true,"dhcp":true}`);
 - `--send-wifi-ap` — дополнительно отправить `InterfaceSettings` для `WiFiAccessPoint`;
 - `--wifi-ap-json '{...}'` — override `WiFiAccessPoint`-настроек JSON-объектом;
 - `--startup-delay-ms 300` — задержка перед отправкой после открытия порта;
@@ -102,6 +103,7 @@ python tools/mock_master_uart.py COM2
 ```bash
 python3 tools/mock_master_uart.py /dev/ttyUSB0 \
   --send all \
+  --send-ethernet-dhcp-mock \
   --send-udp-listener \
   --send-tcp-server \
   --send-ntp-client \

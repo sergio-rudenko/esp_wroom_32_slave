@@ -18,7 +18,7 @@ import time
 
 REQUEST_PORTS = (47701, 23629)
 RESPONSE_PORTS = (23569, 21913)
-REQUEST_PAYLOAD = {"type": "XXX"}
+REQUEST_PAYLOAD = {"type": "LPA"}
 
 
 def setup_logging(verbose: bool) -> None:

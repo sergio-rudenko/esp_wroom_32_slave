@@ -1,8 +1,8 @@
 use anyhow::Result;
 use esp_idf_hal::sys::EspError;
 use esp_idf_hal::gpio::{
-    AnyOutputPin, Gpio0, Gpio16, Gpio17, Gpio18, Gpio19, Gpio21, Gpio22, Gpio23, Gpio25, Gpio26,
-    Gpio27,
+    Gpio0, Gpio16, Gpio17, Gpio18, Gpio19, Gpio21, Gpio22, Gpio23, Gpio25, Gpio26, Gpio27, Gpio5,
+    PinDriver,
 };
 use esp_idf_hal::mac::MAC;
 use esp_idf_svc::handle::RawHandle;
@@ -34,7 +34,8 @@ pub fn spawn_task(
     rmii_rxd1: Gpio26,
     rmii_crs_dv: Gpio27,
     rmii_mdio: Gpio18,
-    rmii_clk_out_gpio17: Gpio17,
+    rmii_clk_out_gpio16: Gpio16,
+    rmii_phy_power_gpio5: Gpio5,
     sysloop: EspSystemEventLoop,
     ethernet_interface_settings_receiver: mpsc::Receiver<EthernetSettings>,
     uart_tx_queue_sender: mpsc::Sender<Vec<u8>>,
@@ -50,6 +51,22 @@ pub fn spawn_task(
         .stack_size(ETHERNET_TASK_STACK_BYTES)
         .spawn(move || {
             crate::system::wdt::subscribe_current_task("eth-task");
+            let _phy_power = match PinDriver::output(rmii_phy_power_gpio5) {
+                Ok(mut pin) => {
+                    if let Err(err) = pin.set_high() {
+                        warn!("Ethernet PHY power pin set_high failed: {err:#}");
+                    } else {
+                        info!("Ethernet PHY power pin enabled (GPIO5 high)");
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                    Some(pin)
+                }
+                Err(err) => {
+                    warn!("Ethernet PHY power pin init failed: {err:#}");
+                    None
+                }
+            };
+
             let mut eth = match EthDriver::new(
                 mac,
                 rmii_rxd0,
@@ -60,10 +77,8 @@ pub fn spawn_task(
                 rmii_tx_en,
                 rmii_txd0,
                 rmii_mdio,
-                RmiiClockConfig::<Gpio0, Gpio16, Gpio17>::OutputInvertedGpio17(
-                    rmii_clk_out_gpio17,
-                ),
-                Option::<AnyOutputPin>::None,
+                RmiiClockConfig::<Gpio0, Gpio16, Gpio17>::OutputGpio16(rmii_clk_out_gpio16),
+                Option::<Gpio16>::None,
                 RmiiEthChipset::LAN87XX,
                 None,
                 sysloop.clone(),
