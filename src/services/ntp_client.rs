@@ -13,7 +13,7 @@ use crate::master::messages::service_settings::NtpClientSettings;
 use crate::master::messages::service_state;
 
 const NTP_CLIENT_TASK_STACK_BYTES: usize = 12 * 1024;
-const RETRY_PERIOD_SECS: u64 = 15;
+const RETRY_PERIOD_SECS: u64 = 60;
 const NTP_PORT: u16 = 123;
 const NTP_PACKET_LEN: usize = 48;
 const NTP_UNIX_EPOCH_DIFF_SECS: i64 = 2_208_988_800;
@@ -94,12 +94,23 @@ fn run(
                 info!("NTP client: no active Wi-Fi/Ethernet link, waiting without sync attempts");
                 no_link_reported = true;
             }
-            match ntp_settings_receiver.recv_timeout(Duration::from_secs(RETRY_PERIOD_SECS)) {
-                Ok(next_settings) => settings = next_settings,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    info!("NTP client task stopped: settings channel closed");
-                    return;
+            let deadline = Instant::now() + Duration::from_secs(RETRY_PERIOD_SECS);
+            loop {
+                match ntp_settings_receiver.recv_timeout(Duration::from_millis(500)) {
+                    Ok(next_settings) => {
+                        settings = next_settings;
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        crate::system::wdt::feed("ntp-client");
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        info!("NTP client task stopped: settings channel closed");
+                        return;
+                    }
                 }
             }
             crate::system::wdt::feed("ntp-client");
@@ -109,7 +120,14 @@ fn run(
 
         let mut synced = false;
         for server in &settings.servers {
-            match sync_once(server, settings.timezone) {
+            // DNS resolve / socket recv timeout can block for multiple seconds when uplink has no Internet.
+            // Keep TWDT deterministic by temporarily unsubscribing around this blocking call.
+            crate::system::wdt::unsubscribe_current_task("ntp-client");
+            let sync_result = sync_once(server, settings.timezone);
+            crate::system::wdt::subscribe_current_task("ntp-client");
+            crate::system::wdt::feed("ntp-client");
+
+            match sync_result {
                 Ok((stratum, timet)) => {
                     info!("NTP sync success: server={server}, stratum={stratum}, timet={timet}");
                     send_service_state(

@@ -93,6 +93,8 @@ Implemented:
   - emits `ServiceState` success payload `{stratum, timet, server}` and error payload `{error, server}`
   - resync uses configured `resyncPeriod`
   - guarded by real link state: sync is skipped while active Wi-Fi/Ethernet link count is zero (prevents repeated error spam)
+  - no-link wait loop uses short `500ms` slices with WDT feed (instead of single `15s` blocking wait)
+  - DNS/UDP sync call is wrapped with temporary TWDT unsubscribe/subscribe to avoid false watchdog reset on long blocking network calls
 - **Task WDT** integrated (`system/wdt.rs`):
   - TWDT timeout configured to `10s`
   - if TWDT is already initialized by runtime, firmware reconfigures it via `esp_task_wdt_reconfigure`
